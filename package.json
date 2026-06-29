@@ -2,9 +2,8 @@
   "name": "my-agent",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "tsx src/index.ts"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +16,9 @@
     "figlet": "^1.11.0"
   },
   "devDependencies": {
-    "tsx": "^4.22.4"
+    "@types/node": "^26.0.1",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
   }
 }
