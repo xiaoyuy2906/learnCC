@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk"
 import { execSync } from 'child_process'
 import * as readline from 'node:readline/promises'
 import figlet from "figlet"
+import path from 'node:path'
 import 'dotenv/config'
 
 // console.log(process.env.ANTHROPIC_API_KEY)
@@ -10,9 +11,10 @@ const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY
 })
 
+const workDir = process.cwd()
 const model = process.env.MODEL_ID || "claude-sonnet-4-6"
 const max_tokens = 4096
-const system = `You are a coding agent at ${process.cwd()}. Use bash to solve tasks. Act, don't explain.`
+const system = `You are a coding agent at ${workDir}. Use bash to solve tasks. Act, don't explain.`
 
 
 // Define one tool. The input_schema is a JSON Schema object describing
@@ -29,7 +31,7 @@ const runBashTool: Anthropic.Tool = {
   }
 }
 
-const tools: Array<Anthropic.Tool> = [runBashTool]
+
 
 
 function runBash(input: Record<string, unknown>) {
@@ -63,7 +65,16 @@ function runTool(name: string, input: Record<string, unknown>) {
 }
 
 
+function checkPath(p: string): string | Error {
+  const resolvedPath = path.resolve(workDir, p)
+  if (resolvedPath.startsWith(workDir + path.sep)) {
+    return p
+  } else {
+    throw Error(`Path escapes workspace: ${p}`)
+  }
+}
 
+const tools: Array<Anthropic.Tool> = [runBashTool]
 
 async function agentLoop(messages: Anthropic.MessageParam[]) {
   let response = await client.messages.create({
