@@ -5,7 +5,7 @@ import figlet from "figlet"
 import path from 'node:path'
 import 'dotenv/config'
 import tools from './toolset.js'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdir, writeFile } from 'node:fs/promises'
 
 // console.log(process.env.ANTHROPIC_API_KEY)
 
@@ -57,12 +57,44 @@ async function runRead(input: Record<string, unknown>){
   }
 }
 
+async function runWrite(input: Record<string, unknown>) {
+  const content = input.content as string
+  try {
+    const filePath = checkPath((input.path) as string)
+    await mkdir(path.dirname(filePath), { recursive: true })
+    await writeFile(filePath, content)
+    return `Wrote ${content.length} bytes to ${filePath}`
+  } catch (e) {
+    return `Error: ${e}`
+  }
+}
+
+async function runEdit(input: Record<string, unknown>) {
+  const oldText = input.oldText as string
+  const newText = input.newText as string
+  try {
+    const filePath = checkPath((input.path) as string)
+    const contents = await readFile(filePath, { encoding: 'utf8' })
+    if (contents.includes(oldText)) {
+      await writeFile(filePath, contents.replace(oldText, () => newText))
+      return `Edited ${filePath}`
+    } else {
+      return `Error: Text not found in ${filePath}`
+    }
+  } catch (e) {
+    return `Error: ${e}`
+  }
+}
+
 async function runTool(name: string, input: Record<string, unknown>) {
   if (name === "bash") {
     return runBash(input)
   }else if ( name ==='readFile'){
-    const result = await runRead(input)
-    return result
+    return await runRead(input)
+  } else if (name === 'writeFile') {
+    return await runWrite(input)
+  } else if (name == 'editFile') {
+    return await runEdit(input)
   }
   return { error: `Unknown tool: ${name}` }
 }
