@@ -5,7 +5,7 @@ import figlet from "figlet"
 import path from 'node:path'
 import 'dotenv/config'
 import tools from './toolset.js'
-import { readFile, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, mkdir, writeFile, glob } from 'node:fs/promises'
 
 // console.log(process.env.ANTHROPIC_API_KEY)
 
@@ -86,6 +86,19 @@ async function runEdit(input: Record<string, unknown>) {
   }
 }
 
+async function runGlob(input: Record<string, unknown>) {
+  const pattern = input.pattern as string
+  const result = []
+  try {
+    for await (const entry of glob(pattern, { cwd: workDir })) {
+      result.push(checkPath(entry))
+    }
+    return result.join('\n') || "(no matches)"
+  } catch (e) {
+    return `Error: ${e}`
+  }
+}
+
 async function runTool(name: string, input: Record<string, unknown>) {
   if (name === "bash") {
     return runBash(input)
@@ -95,6 +108,8 @@ async function runTool(name: string, input: Record<string, unknown>) {
     return await runWrite(input)
   } else if (name == 'editFile') {
     return await runEdit(input)
+  } else if (name === 'glob') {
+    return await runGlob(input)
   }
   return { error: `Unknown tool: ${name}` }
 }

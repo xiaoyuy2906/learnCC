@@ -78,6 +78,21 @@ const editFileTool: Anthropic.Tool = {
   }
 }
 
-const tools: Array<Anthropic.Tool> = [runBashTool, readFileTool, writeFileTool, editFileTool]
+const globTool: Anthropic.Tool = {
+  name: "glob",
+  description: "Glob pattern to match files.",
+  input_schema: {
+    type: "object",
+    properties: {
+      pattern: {
+        type: "string",
+        description: "The pattern to be matched."
+      },
+    },
+    required: ["pattern"]
+  }
+}
+
+const tools: Array<Anthropic.Tool> = [runBashTool, readFileTool, writeFileTool, editFileTool, globTool]
 
 export default tools
