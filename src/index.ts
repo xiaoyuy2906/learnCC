@@ -4,6 +4,8 @@ import * as readline from 'node:readline/promises'
 import figlet from "figlet"
 import path from 'node:path'
 import 'dotenv/config'
+import tools from './toolset.js'
+import { readFile } from 'node:fs/promises'
 
 // console.log(process.env.ANTHROPIC_API_KEY)
 
@@ -15,23 +17,6 @@ const workDir = process.cwd()
 const model = process.env.MODEL_ID || "claude-sonnet-4-6"
 const max_tokens = 4096
 const system = `You are a coding agent at ${workDir}. Use bash to solve tasks. Act, don't explain.`
-
-
-// Define one tool. The input_schema is a JSON Schema object describing
-// the arguments Claude should pass when it calls this tool.
-const runBashTool: Anthropic.Tool = {
-  name: "bash",
-  description: "Run a shell command",
-  input_schema: {
-    type: "object",
-    properties: {
-      command: { type: "string", }
-    },
-    required: ["command"]
-  }
-}
-
-
 
 
 function runBash(input: Record<string, unknown>) {
@@ -57,15 +42,33 @@ function runBash(input: Record<string, unknown>) {
 }
 
 
-function runTool(name: string, input: Record<string, unknown>) {
+async function runRead(input: Record<string, unknown>){
+ const limit = input.limit as number | undefined| null
+  try{
+    const filePath = checkPath((input.path) as string ) 
+    const contents = await readFile(filePath, { encoding: 'utf8' })
+    let lines = contents.split('\n')
+    if (limit && limit < lines.length){
+      lines = lines.slice(0,limit).concat(`... (${lines.length - limit} more lines)`)
+    }
+    return lines.join('\n') || '(empty file)'
+  }catch(e){
+     return `Error: ${e}`
+  }
+}
+
+async function runTool(name: string, input: Record<string, unknown>) {
   if (name === "bash") {
     return runBash(input)
+  }else if ( name ==='readFile'){
+    const result = await runRead(input)
+    return result
   }
   return { error: `Unknown tool: ${name}` }
 }
 
 
-function checkPath(p: string): string | Error {
+function checkPath(p: string): string {
   const resolvedPath = path.resolve(workDir, p)
   if (resolvedPath.startsWith(workDir + path.sep)) {
     return p
@@ -74,7 +77,7 @@ function checkPath(p: string): string | Error {
   }
 }
 
-const tools: Array<Anthropic.Tool> = [runBashTool]
+
 
 async function agentLoop(messages: Anthropic.MessageParam[]) {
   let response = await client.messages.create({
@@ -95,7 +98,7 @@ async function agentLoop(messages: Anthropic.MessageParam[]) {
     )!
 
 
-    const result = runTool(toolUse.name, toolUse.input as Record<string, unknown>);
+    const result = await runTool(toolUse.name, toolUse.input as Record<string, unknown>);
 
     messages.push({ role: "assistant", content: response.content });
     messages.push({
