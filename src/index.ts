@@ -18,14 +18,34 @@ const model = process.env.MODEL_ID || "claude-sonnet-4-6"
 const max_tokens = 4096
 const system = `You are a coding agent at ${workDir}. Use bash to solve tasks. Act, don't explain.`
 
+const denyList: string[] = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"]
+
+
+function checkDenyList(command: string): void {
+  const hit = denyList.find(it => command.includes(it))
+// ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"].some(it=>('sudo rm -rf /').includes(it))
+  if (hit) {
+    throw new Error(`Blocked: ${hit} is on the deny list`)
+  }
+}
+
+
+function checkPath(p: string): string {
+  const resolvedPath = path.resolve(workDir, p)
+  if (resolvedPath.startsWith(workDir + path.sep)) {
+    return p
+  } else {
+    throw new Error(`Path escapes workspace: ${p}`)
+  }
+}
 
 function runBash(input: Record<string, unknown>) {
   const command = input.command as string
-  const dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
-  if (dangerous.some(it => (command as string).includes(it))) {
-    // ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"].some(it=>('sudo rm -rf /').includes(it))
-    return "Error: Dangerous command blocked"
-  }
+  // const dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
+  // if (dangerous.some(it => (command as string).includes(it))) {
+  //   // ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"].some(it=>('sudo rm -rf /').includes(it))
+  //   return "Error: Dangerous command blocked"
+  // }
   try {
     const result = execSync(command, {
       cwd: process.cwd(),
@@ -115,14 +135,7 @@ async function runTool(name: string, input: Record<string, unknown>) {
 }
 
 
-function checkPath(p: string): string {
-  const resolvedPath = path.resolve(workDir, p)
-  if (resolvedPath.startsWith(workDir + path.sep)) {
-    return p
-  } else {
-    throw Error(`Path escapes workspace: ${p}`)
-  }
-}
+
 
 
 
