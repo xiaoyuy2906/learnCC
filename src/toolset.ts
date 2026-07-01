@@ -2,42 +2,42 @@ import Anthropic from "@anthropic-ai/sdk"
 
 // Define one tool. The input_schema is a JSON Schema object describing
 // the arguments Claude should pass when it calls this tool.
-const runBashTool: Anthropic.Tool = {
-  name: "bash",
+const runBashTool = {
+  name: "bash" as const,
   description: "Run a shell command",
   input_schema: {
-    type: "object",
+    type: "object" as const,
     properties: {
       command: { type: "string", 
         description: "The command for bash to run."
       }
     },
-    required: ["command"]
+    required: ["command"] as const
   }
-}
+} satisfies Anthropic.Tool
 
 
-const readFileTool:Anthropic.Tool ={
-  name:"readFile",
+const readFileTool = {
+  name: "readFile" as const,
   description: "Read file contents.",
-    input_schema: {
+  input_schema: {
     type: "object",
     properties: {
       path: { 
         type: "string",
         description: "The path of the file to be read."
        },
-       limit:{
+      limit: {
         type:"integer",
         description: "The number of lines to be read."
        }
     },
-    required: ["path"]
+    required: ["path"] as const
   }
-}
+} satisfies Anthropic.Tool
 
-const writeFileTool: Anthropic.Tool = {
-  name: "writeFile",
+const writeFileTool = {
+  name: "writeFile" as const,
   description: "Write content to file.",
   input_schema: {
     type: "object",
@@ -51,12 +51,12 @@ const writeFileTool: Anthropic.Tool = {
         description: "The content of the file to be written."
       }
     },
-    required: ["path", "content"]
+    required: ["path", "content"] as const
   }
-}
+} satisfies Anthropic.Tool
 
-const editFileTool: Anthropic.Tool = {
-  name: "editFile",
+const editFileTool = {
+  name: "editFile" as const,
   description: "Replace a text snippet in a file.",
   input_schema: {
     type: "object",
@@ -74,12 +74,12 @@ const editFileTool: Anthropic.Tool = {
         description: "Text to replace it with."
       },
     },
-    required: ["path", "oldText", "newText"]
+    required: ["path", "oldText", "newText"] as const
   }
-}
+} satisfies Anthropic.Tool
 
-const globTool: Anthropic.Tool = {
-  name: "glob",
+const globTool = {
+  name: "glob" as const,
   description: "Glob pattern to match files.",
   input_schema: {
     type: "object",
@@ -89,10 +89,15 @@ const globTool: Anthropic.Tool = {
         description: "The pattern to be matched."
       },
     },
-    required: ["pattern"]
+    required: ["pattern"] as const
   }
-}
+} satisfies Anthropic.Tool
 
-const tools: Array<Anthropic.Tool> = [runBashTool, readFileTool, writeFileTool, editFileTool, globTool]
+const tools = [runBashTool, readFileTool, writeFileTool, editFileTool, globTool]
+
+export type ToolName = typeof tools[number]["name"]
+// ToolName is now "bash" | "readFile" | "writeFile" | "editFile" | "glob"
+
+
 
 export default tools

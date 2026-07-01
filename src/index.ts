@@ -5,6 +5,7 @@ import figlet from "figlet"
 import path from 'node:path'
 import 'dotenv/config'
 import tools from './toolset.js'
+import { type ToolName } from './toolset.js'
 import { readFile, mkdir, writeFile, glob } from 'node:fs/promises'
 
 // console.log(process.env.ANTHROPIC_API_KEY)
@@ -18,8 +19,8 @@ const model = process.env.MODEL_ID || "claude-sonnet-4-6"
 const max_tokens = 4096
 const system = `You are a coding agent at ${workDir}. Use bash to solve tasks. Act, don't explain.`
 
+// Gate 1: Hard deny list — always forbidden
 const denyList: string[] = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"]
-
 
 function checkDenyList(command: string): void {
   const hit = denyList.find(it => command.includes(it))
@@ -27,7 +28,38 @@ function checkDenyList(command: string): void {
   if (hit) {
     throw new Error(`Blocked: ${hit} is on the deny list`)
   }
+  return
 }
+
+
+interface Rule {
+  toolsName: ToolName[]
+  check: (input: Record<string, unknown>) => boolean
+  message: string
+}
+
+const permissionRules: Rule[] = [
+  {
+    toolsName: ["writeFile", "editFile"],
+    check: (input) => !path.resolve(workDir, input.path as string).startsWith(workDir + path.sep),
+    message: "Writing outside workspace"
+  },
+  {
+    toolsName: ["bash"],
+    check: (input) => ["rm ", "> /etc/", "chmod 777"].some(it => (input.command as string).includes(it)),
+    message: "Potentially destructive command"
+  },
+]
+
+
+function checkRules(name: ToolName, input: Record<string, unknown>) {
+  permissionRules.forEach(rule => {
+    if (rule.toolsName.includes(name) && rule.check(input)) {
+      throw new Error(rule.message)
+    }
+  })
+}
+
 
 
 function checkPath(p: string): string {
