@@ -24,7 +24,7 @@ const denyList: string[] = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "d
 
 function checkDenyList(command: string): void {
   const hit = denyList.find(it => command.includes(it))
-// ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"].some(it=>('sudo rm -rf /').includes(it))
+  // ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"].some(it=>('sudo rm -rf /').includes(it))
   if (hit) {
     throw new Error(`Blocked: ${hit} is on the deny list`)
   }
@@ -94,18 +94,18 @@ function runBash(input: Record<string, unknown>) {
 }
 
 
-async function runRead(input: Record<string, unknown>){
- const limit = input.limit as number | undefined| null
-  try{
-    const filePath = checkPath((input.path) as string ) 
+async function runRead(input: Record<string, unknown>) {
+  const limit = input.limit as number | undefined | null
+  try {
+    const filePath = checkPath((input.path) as string)
     const contents = await readFile(filePath, { encoding: 'utf8' })
     let lines = contents.split('\n')
-    if (limit && limit < lines.length){
-      lines = lines.slice(0,limit).concat(`... (${lines.length - limit} more lines)`)
+    if (limit && limit < lines.length) {
+      lines = lines.slice(0, limit).concat(`... (${lines.length - limit} more lines)`)
     }
     return lines.join('\n') || '(empty file)'
-  }catch(e){
-     return `Error: ${e}`
+  } catch (e) {
+    return `Error: ${e}`
   }
 }
 
@@ -154,7 +154,7 @@ async function runGlob(input: Record<string, unknown>) {
 async function runTool(name: string, input: Record<string, unknown>) {
   if (name === "bash") {
     return runBash(input)
-  }else if ( name ==='readFile'){
+  } else if (name === 'readFile') {
     return await runRead(input)
   } else if (name === 'writeFile') {
     return await runWrite(input)
@@ -221,6 +221,7 @@ async function agentLoop(messages: Anthropic.MessageParam[]) {
       console.log(`Claude (${new Date().toISOString()}) >> ` + block.text)
     }
   }
+  console.log(response)
 }
 
 
