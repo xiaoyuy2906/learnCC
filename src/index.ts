@@ -5,6 +5,7 @@ import figlet from "figlet"
 import path from 'node:path'
 import 'dotenv/config'
 import tools from './toolset.js'
+import os from 'node:os'
 import { type ToolName } from './toolset.js'
 import { readFile, mkdir, writeFile, glob } from 'node:fs/promises'
 
@@ -16,8 +17,14 @@ const client = new Anthropic({
 
 const workDir = process.cwd()
 const model = process.env.MODEL_ID || "claude-sonnet-4-6"
-const max_tokens = 4096
-const system = `You are a coding agent at ${workDir}. Use bash to solve tasks. Act, don't explain.`
+const max_tokens = 9216
+
+const environmentPrompt = os.platform() === 'win32' ?
+  'Windows: the bash tool runs through cmd.exe; use cmd.exe syntax, not Unix Bash or PowerShell syntax, and prefer dedicated file tools for file operations'
+  : 'Unix-like: the bash tool runs the system shell'
+
+
+const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. All destructive operations require user approval.`
 
 // Gate 1: Hard deny list — always forbidden
 const denyList: string[] = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"]
@@ -93,6 +100,7 @@ function runBash(input: Record<string, unknown>) {
   }
 }
 
+type ToolHandler = (input: Record<string, unknown>) => string | Promise<string>
 
 async function runRead(input: Record<string, unknown>) {
   const limit = input.limit as number | undefined | null
@@ -151,19 +159,25 @@ async function runGlob(input: Record<string, unknown>) {
   }
 }
 
-async function runTool(name: string, input: Record<string, unknown>) {
-  if (name === "bash") {
-    return runBash(input)
-  } else if (name === 'readFile') {
-    return await runRead(input)
-  } else if (name === 'writeFile') {
-    return await runWrite(input)
-  } else if (name == 'editFile') {
-    return await runEdit(input)
-  } else if (name === 'glob') {
-    return await runGlob(input)
+const toolHandlerMap = {
+  bash: runBash,
+  readFile: runRead,
+  writeFile: runWrite,
+  editFile: runEdit,
+  glob: runGlob
+} satisfies {
+  [key in ToolName]: ToolHandler
+}
+
+function isToolName(name: string): name is ToolName {
+  return Object.hasOwn(toolHandlerMap, name)
+}
+
+async function runTool(name: string, input: Record<string, unknown>): Promise<string> {
+  if (isToolName(name)) {
+    return await toolHandlerMap[name](input)   // 这里 name 是 ToolName 了
   }
-  return { error: `Unknown tool: ${name}` }
+  return `Error: Unknown tool: ${name}`
 }
 
 
@@ -188,7 +202,6 @@ async function agentLoop(messages: Anthropic.MessageParam[]) {
     const toolUse = response.content.find(
       (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
     )!
-
 
     const result = await runTool(toolUse.name, toolUse.input as Record<string, unknown>);
 
