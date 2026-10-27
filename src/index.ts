@@ -38,6 +38,7 @@ function checkDenyList(command: string): void {
   return
 }
 
+// Gate 2: Rule matching — context-dependent checks
 interface Rule {
   toolsName: ToolName[]
   check: (input: Record<string, unknown>) => boolean
@@ -57,12 +58,18 @@ const permissionRules: Rule[] = [
   }
 ]
 
+//  Gate 3: User approval — wait for confirmation after rule match
 function checkRules(name: ToolName, input: Record<string, unknown>) {
   permissionRules.forEach(rule => {
     if (rule.toolsName.includes(name) && rule.check(input)) {
       throw new Error(rule.message)
     }
   })
+}
+
+async function askUser() {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const input = await rl.question(`s01 (${new Date().toISOString()}) >> `)
 }
 
 function checkPath(p: string): string {
