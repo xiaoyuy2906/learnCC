@@ -1,13 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk"
-import { execSync } from 'child_process'
-import * as readline from 'node:readline/promises'
+import { execSync } from "child_process"
+import * as readline from "node:readline/promises"
 import figlet from "figlet"
-import path from 'node:path'
-import 'dotenv/config'
-import tools from './toolset.js'
-import os from 'node:os'
-import { type ToolName } from './toolset.js'
-import { readFile, mkdir, writeFile, glob } from 'node:fs/promises'
+import path from "node:path"
+import "dotenv/config"
+import tools from "./toolset.js"
+import os from "node:os"
+import { type ToolName } from "./toolset.js"
+import { readFile, mkdir, writeFile, glob } from "node:fs/promises"
 
 // console.log(process.env.ANTHROPIC_API_KEY)
 
@@ -19,10 +19,10 @@ const workDir = process.cwd()
 const model = process.env.MODEL_ID || "claude-sonnet-4-6"
 const max_tokens = 9216
 
-const environmentPrompt = os.platform() === 'win32' ?
-  'Windows: the bash tool runs through cmd.exe; use cmd.exe syntax, not Unix Bash or PowerShell syntax, and prefer dedicated file tools for file operations'
-  : 'Unix-like: the bash tool runs the system shell'
-
+const environmentPrompt =
+  os.platform() === "win32"
+    ? "Windows: the bash tool runs through cmd.exe; use cmd.exe syntax, not Unix Bash or PowerShell syntax, and prefer dedicated file tools for file operations"
+    : "Unix-like: the bash tool runs the system shell"
 
 const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. All destructive operations require user approval.`
 
@@ -38,7 +38,6 @@ function checkDenyList(command: string): void {
   return
 }
 
-
 interface Rule {
   toolsName: ToolName[]
   check: (input: Record<string, unknown>) => boolean
@@ -48,16 +47,15 @@ interface Rule {
 const permissionRules: Rule[] = [
   {
     toolsName: ["writeFile", "editFile"],
-    check: (input) => !path.resolve(workDir, input.path as string).startsWith(workDir + path.sep),
+    check: input => !path.resolve(workDir, input.path as string).startsWith(workDir + path.sep),
     message: "Writing outside workspace"
   },
   {
     toolsName: ["bash"],
-    check: (input) => ["rm ", "> /etc/", "chmod 777"].some(it => (input.command as string).includes(it)),
+    check: input => ["rm ", "> /etc/", "chmod 777"].some(it => (input.command as string).includes(it)),
     message: "Potentially destructive command"
-  },
+  }
 ]
-
 
 function checkRules(name: ToolName, input: Record<string, unknown>) {
   permissionRules.forEach(rule => {
@@ -66,8 +64,6 @@ function checkRules(name: ToolName, input: Record<string, unknown>) {
     }
   })
 }
-
-
 
 function checkPath(p: string): string {
   const resolvedPath = path.resolve(workDir, p)
@@ -89,11 +85,11 @@ function runBash(input: Record<string, unknown>) {
     const result = execSync(command, {
       cwd: process.cwd(),
       timeout: 120000,
-      encoding: 'utf-8'
+      encoding: "utf-8"
     })
     return result.slice(0, max_tokens) || "(no output)"
   } catch (e: any) {
-    if (e.code === 'ETIMEDOUT') {
+    if (e.code === "ETIMEDOUT") {
       return "Error: Timeout (120s)"
     }
     return `Error: ${e.stderr || e.message}`
@@ -105,13 +101,13 @@ type ToolHandler = (input: Record<string, unknown>) => string | Promise<string>
 async function runRead(input: Record<string, unknown>) {
   const limit = input.limit as number | undefined | null
   try {
-    const filePath = checkPath((input.path) as string)
-    const contents = await readFile(filePath, { encoding: 'utf8' })
-    let lines = contents.split('\n')
+    const filePath = checkPath(input.path as string)
+    const contents = await readFile(filePath, { encoding: "utf8" })
+    let lines = contents.split("\n")
     if (limit && limit < lines.length) {
       lines = lines.slice(0, limit).concat(`... (${lines.length - limit} more lines)`)
     }
-    return lines.join('\n') || '(empty file)'
+    return lines.join("\n") || "(empty file)"
   } catch (e) {
     return `Error: ${e}`
   }
@@ -120,7 +116,7 @@ async function runRead(input: Record<string, unknown>) {
 async function runWrite(input: Record<string, unknown>) {
   const content = input.content as string
   try {
-    const filePath = checkPath((input.path) as string)
+    const filePath = checkPath(input.path as string)
     await mkdir(path.dirname(filePath), { recursive: true })
     await writeFile(filePath, content)
     return `Wrote ${content.length} bytes to ${filePath}`
@@ -133,10 +129,13 @@ async function runEdit(input: Record<string, unknown>) {
   const oldText = input.oldText as string
   const newText = input.newText as string
   try {
-    const filePath = checkPath((input.path) as string)
-    const contents = await readFile(filePath, { encoding: 'utf8' })
+    const filePath = checkPath(input.path as string)
+    const contents = await readFile(filePath, { encoding: "utf8" })
     if (contents.includes(oldText)) {
-      await writeFile(filePath, contents.replace(oldText, () => newText))
+      await writeFile(
+        filePath,
+        contents.replace(oldText, () => newText)
+      )
       return `Edited ${filePath}`
     } else {
       return `Error: Text not found in ${filePath}`
@@ -153,7 +152,7 @@ async function runGlob(input: Record<string, unknown>) {
     for await (const entry of glob(pattern, { cwd: workDir })) {
       result.push(checkPath(entry))
     }
-    return result.join('\n') || "(no matches)"
+    return result.join("\n") || "(no matches)"
   } catch (e) {
     return `Error: ${e}`
   }
@@ -175,15 +174,10 @@ function isToolName(name: string): name is ToolName {
 
 async function runTool(name: string, input: Record<string, unknown>): Promise<string> {
   if (isToolName(name)) {
-    return await toolHandlerMap[name](input)   // 这里 name 是 ToolName 了
+    return await toolHandlerMap[name](input) // 这里 name 是 ToolName 了
   }
   return `Error: Unknown tool: ${name}`
 }
-
-
-
-
-
 
 async function agentLoop(messages: Anthropic.MessageParam[]) {
   let response = await client.messages.create({
@@ -192,30 +186,27 @@ async function agentLoop(messages: Anthropic.MessageParam[]) {
     tools,
     tool_choice: { type: "auto", disable_parallel_tool_use: true },
     messages,
-    system,
+    system
   })
 
   // Loop until Claude stops asking for tools. Each iteration runs the requested
   // tool, appends the result to history, and asks Claude to continue.
   while (response.stop_reason === "tool_use") {
+    const toolUse = response.content.find((block): block is Anthropic.ToolUseBlock => block.type === "tool_use")!
 
-    const toolUse = response.content.find(
-      (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-    )!
+    const result = await runTool(toolUse.name, toolUse.input as Record<string, unknown>)
 
-    const result = await runTool(toolUse.name, toolUse.input as Record<string, unknown>);
-
-    messages.push({ role: "assistant", content: response.content });
+    messages.push({ role: "assistant", content: response.content })
     messages.push({
       role: "user",
       content: [
         {
           type: "tool_result",
           tool_use_id: toolUse.id,
-          content: JSON.stringify(result),
-        },
-      ],
-    });
+          content: JSON.stringify(result)
+        }
+      ]
+    })
 
     response = await client.messages.create({
       model,
@@ -223,8 +214,8 @@ async function agentLoop(messages: Anthropic.MessageParam[]) {
       tools,
       tool_choice: { type: "auto", disable_parallel_tool_use: true },
       messages,
-      system,
-    });
+      system
+    })
   }
 
   // Claude stopped calling tools: save its final turn and print the text.
@@ -237,7 +228,6 @@ async function agentLoop(messages: Anthropic.MessageParam[]) {
   console.log(response)
 }
 
-
 async function main() {
   const msgHistory: Anthropic.MessageParam[] = []
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
@@ -247,7 +237,7 @@ async function main() {
       horizontalLayout: "default",
       verticalLayout: "default",
       width: 120,
-      whitespaceBreak: true,
+      whitespaceBreak: true
     })
   )
 

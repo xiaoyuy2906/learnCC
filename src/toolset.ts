@@ -8,14 +8,11 @@ const runBashTool = {
   input_schema: {
     type: "object" as const,
     properties: {
-      command: { type: "string", 
-        description: "The command for bash to run."
-      }
+      command: { type: "string", description: "The command for bash to run." }
     },
     required: ["command"] as const
   }
 } satisfies Anthropic.Tool
-
 
 const readFileTool = {
   name: "readFile" as const,
@@ -23,14 +20,14 @@ const readFileTool = {
   input_schema: {
     type: "object",
     properties: {
-      path: { 
+      path: {
         type: "string",
         description: "The path of the file to be read."
-       },
+      },
       limit: {
-        type:"integer",
+        type: "integer",
         description: "The number of lines to be read."
-       }
+      }
     },
     required: ["path"] as const
   }
@@ -72,7 +69,7 @@ const editFileTool = {
       newText: {
         type: "string",
         description: "Text to replace it with."
-      },
+      }
     },
     required: ["path", "oldText", "newText"] as const
   }
@@ -87,7 +84,7 @@ const globTool = {
       pattern: {
         type: "string",
         description: "The pattern to be matched."
-      },
+      }
     },
     required: ["pattern"] as const
   }
@@ -95,9 +92,7 @@ const globTool = {
 
 const tools = [runBashTool, readFileTool, writeFileTool, editFileTool, globTool]
 
-export type ToolName = typeof tools[number]["name"]
+export type ToolName = (typeof tools)[number]["name"]
 // ToolName is now "bash" | "readFile" | "writeFile" | "editFile" | "glob"
-
-
 
 export default tools
