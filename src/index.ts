@@ -29,16 +29,55 @@ const system = `You are a coding agent at ${workDir}. Environment: ${environment
 // Gate 1: Hard deny list — always forbidden
 const denyList: string[] = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"]
 
-function checkDenyList(command: string): void {
+// Returns the reason if blocked, undefined if the command is not on the deny list
+function checkDenyList(command: string) {
   const hit = denyList.find(it => command.includes(it))
   // ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"].some(it=>('sudo rm -rf /').includes(it))
   if (hit) {
-    throw new Error(`Blocked: ${hit} is on the deny list`)
+    return `Blocked: ${hit} is on the deny list`
   }
-  return
 }
 
 // Gate 2: Rule matching — context-dependent checks
+
+// Why this regex?
+// The system prompt tells the model to use cmd.exe on Windows, and cmd.exe doesn't delete with `rm`,
+// so the old rule that only looked for "rm " missed every Windows delete command.
+// These are the delete commands across shells:
+//
+//   Command      Shell              What it does                 Unix equivalent
+//   rm           Unix (bash/zsh)    Delete files/directories     rm
+//   del          cmd.exe            Delete files                 rm
+//   erase        cmd.exe            Same as del, another name    rm
+//   rmdir        cmd.exe and Unix   Delete a directory           rmdir / rm -r
+//   rd           cmd.exe            Short for rmdir              rmdir
+//   Remove-Item  PowerShell         Delete files or directories  rm -r
+//
+// The regex piece by piece: /(^|[\s;&|(])(rm|del|erase|rmdir|rd|Remove-Item)\s/i
+//
+//   (^|[\s;&|(])   What comes right before the command name must be one of:
+//                    ^         the start of the string, e.g. "del a.txt"
+//                    [\s;&|(]  whitespace or one of ; & | (  — i.e. where the previous command ended,
+//                              e.g. "cd tmp && del a.txt", "echo hi; rm a", "ls | rm"
+//                  This part keeps the "rm" inside "perform" or "confirm" from counting as a command.
+//
+//   (rm|del|...)   Any one command name from the table above; | means "or".
+//
+//   \s             The command name must be followed by whitespace, meaning the name ends there.
+//                  This part stops "rmdir" from matching as just "rm", and "delete" from matching as "del".
+//
+//   i              Case-insensitive, because cmd and PowerShell ignore case: DEL and remove-item are valid too.
+//
+// Examples:
+//   "rm -f a.tmp"           ✅ start + rm + space
+//   "del /q *.tmp"          ✅ start + del + space
+//   "cd temp && rd /s x"    ✅ space + rd + space
+//   "Remove-Item x.txt"     ✅ start + Remove-Item + space
+//   "echo perform test"     ❌ "rm" follows the letter o, not the start or a separator
+//   "echo hello world"      ❌ "rd" follows the letter o
+//   "git status"            ❌ no delete command
+const destructiveCmd = /(^|[\s;&|(])(rm|del|erase|rmdir|rd|Remove-Item)\s/i
+
 interface Rule {
   toolsName: ToolName[]
   check: (input: Record<string, unknown>) => boolean
@@ -48,29 +87,67 @@ interface Rule {
 const permissionRules: Rule[] = [
   {
     toolsName: ["writeFile", "editFile"],
-    check: input => !path.resolve(workDir, input.path as string).startsWith(workDir + path.sep),
+    check: input => !path.resolve(workDir, String(input.path ?? "")).startsWith(workDir + path.sep),
     message: "Writing outside workspace"
   },
   {
     toolsName: ["bash"],
-    check: input => ["rm ", "> /etc/", "chmod 777"].some(it => (input.command as string).includes(it)),
+    check: input => {
+      const command = String(input.command ?? "")
+      return destructiveCmd.test(command) || ["> /etc/", "chmod 777"].some(it => command.includes(it))
+    },
     message: "Potentially destructive command"
   }
 ]
 
-//  Gate 3: User approval — wait for confirmation after rule match
 function checkRules(name: ToolName, input: Record<string, unknown>) {
-  permissionRules.forEach(rule => {
+  for (const rule of permissionRules) {
     if (rule.toolsName.includes(name) && rule.check(input)) {
-      throw new Error(rule.message)
+      return rule.message
     }
-  })
+  }
 }
 
-async function askUser() {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  const input = await rl.question(`s01 (${new Date().toISOString()}) >> `)
+//  Gate 3: User approval — wait for confirmation after rule match
+async function askUser(
+  rl: readline.Interface,
+  name: ToolName,
+  input: Record<string, unknown>,
+  reason: string
+): Promise<boolean> {
+  console.log(`\n⚠  ${reason}`)
+  console.log(`   Tool: ${name}(${JSON.stringify(input)})`)
+  const answer = await rl.question("   Allow? [y/N] ")
+  return ["y", "yes"].includes(answer.trim().toLowerCase())
 }
+
+// Pipeline: Gate 1 -> Gate 2 -> Gate 3
+async function checkPermission(toolUseBlock: Anthropic.ToolUseBlock, rl: readline.Interface): Promise<boolean> {
+  const { name, input } = toolUseBlock as { name: ToolName; input: Record<string, unknown> }
+
+  if (name === "bash") {
+    const command = input.command
+    if (typeof command !== "string") {
+      return false
+    }
+
+    const blocked = checkDenyList(command)
+    if (blocked) {
+      console.log(`\n⛔ ${blocked}`)
+      return false
+    }
+  }
+
+  const reason = checkRules(name, input)
+  if (reason) {
+    return askUser(rl, name, input, reason)
+  }
+  return true
+}
+
+// s02: Tool Definitions & Dispatch
+
+type ToolHandler = (input: Record<string, unknown>) => string | Promise<string>
 
 function checkPath(p: string): string {
   const resolvedPath = path.resolve(workDir, p)
@@ -99,11 +176,11 @@ function runBash(input: Record<string, unknown>) {
     if (e.code === "ETIMEDOUT") {
       return "Error: Timeout (120s)"
     }
-    return `Error: ${e.stderr || e.message}`
+    // Many tools (tsc, test runners) print the failure reason to stdout, so return both streams
+    const output = `${e.stdout ?? ""}${e.stderr ?? ""}`.trim()
+    return `Error: ${output || e.message}`.slice(0, max_tokens)
   }
 }
-
-type ToolHandler = (input: Record<string, unknown>) => string | Promise<string>
 
 async function runRead(input: Record<string, unknown>) {
   const limit = input.limit as number | undefined | null
@@ -186,41 +263,60 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<st
   return `Error: Unknown tool: ${name}`
 }
 
-async function agentLoop(messages: Anthropic.MessageParam[]) {
+async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interface) {
   let response = await client.messages.create({
     model,
     max_tokens,
     tools,
-    tool_choice: { type: "auto", disable_parallel_tool_use: true },
     messages,
     system
   })
 
-  // Loop until Claude stops asking for tools. Each iteration runs the requested
-  // tool, appends the result to history, and asks Claude to continue.
+  // Loop until Claude stops asking for tools. Each iteration runs every requested
+  // tool (Claude may ask for several at once), appends all results to history in
+  // one user message, and asks Claude to continue.
   while (response.stop_reason === "tool_use") {
-    const toolUse = response.content.find((block): block is Anthropic.ToolUseBlock => block.type === "tool_use")!
+    const toolResults: Anthropic.ToolResultBlockParam[] = []
 
-    const result = await runTool(toolUse.name, toolUse.input as Record<string, unknown>)
+    for (const block of response.content) {
+      if (block.type === "tool_use") {
+        if (await checkPermission(block, rl)) {
+          console.log(`> ${block.name}(${JSON.stringify(block.input)})`)
+          try {
+            const result = await runTool(block.name, block.input as Record<string, unknown>)
+            console.log(result.slice(0, 200))
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: JSON.stringify(result)
+            })
+          } catch (err) {
+            // Signal failure so Claude can retry or ask for clarification.
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: String(err),
+              is_error: true
+            })
+          }
+        } else {
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: "Permission denied."
+          })
+        }
+      }
+    }
 
     messages.push({ role: "assistant", content: response.content })
-    messages.push({
-      role: "user",
-      content: [
-        {
-          type: "tool_result",
-          tool_use_id: toolUse.id,
-          content: JSON.stringify(result)
-        }
-      ]
-    })
+    messages.push({ role: "user", content: toolResults })
 
     response = await client.messages.create({
       model,
       max_tokens,
       tools,
-      tool_choice: { type: "auto", disable_parallel_tool_use: true },
-      messages,
+        messages,
       system
     })
   }
@@ -232,7 +328,7 @@ async function agentLoop(messages: Anthropic.MessageParam[]) {
       console.log(`Claude (${new Date().toISOString()}) >> ` + block.text)
     }
   }
-  console.log(response)
+  // console.log(JSON.stringify(response, null, 2))
 }
 
 async function main() {
@@ -249,12 +345,17 @@ async function main() {
   )
 
   while (true) {
-    const input = await rl.question(`s01 (${new Date().toISOString()}) >> `)
+    const input = await rl.question(`s03 (${new Date().toISOString()}) >> `)
     if (["q", "exit", ""].includes(input.trim().toLowerCase())) {
       break
     }
     msgHistory.push({ role: "user", content: input })
-    await agentLoop(msgHistory)
+    try {
+      await agentLoop(msgHistory, rl)
+    } catch (err) {
+      // API failed (network, rate limit, bad key...): report it and keep the session alive
+      console.log(`\nAPI error: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   rl.close()
