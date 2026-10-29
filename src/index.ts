@@ -8,6 +8,7 @@ import tools from "./toolset.js"
 import os from "node:os"
 import { type ToolName } from "./toolset.js"
 import { readFile, mkdir, writeFile, glob } from "node:fs/promises"
+import { styleText } from "node:util"
 
 // console.log(process.env.ANTHROPIC_API_KEY)
 
@@ -25,6 +26,8 @@ const environmentPrompt =
     : "Unix-like: the bash tool runs the system shell"
 
 const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. All destructive operations require user approval.`
+
+// s03: Three-Gate Permission Pipeline
 
 // Gate 1: Hard deny list — always forbidden
 const denyList: string[] = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"]
@@ -115,8 +118,8 @@ async function askUser(
   input: Record<string, unknown>,
   reason: string
 ): Promise<boolean> {
-  console.log(`\n⚠  ${reason}`)
-  console.log(`   Tool: ${name}(${JSON.stringify(input)})`)
+  console.log(styleText("yellow", `\n⚠  ${reason}`))
+  console.log(styleText("gray", `   Tool: ${name}(${JSON.stringify(input)})`))
   const answer = await rl.question("   Allow? [y/N] ")
   return ["y", "yes"].includes(answer.trim().toLowerCase())
 }
@@ -133,7 +136,7 @@ async function checkPermission(toolUseBlock: Anthropic.ToolUseBlock, rl: readlin
 
     const blocked = checkDenyList(command)
     if (blocked) {
-      console.log(`\n⛔ ${blocked}`)
+      console.log(styleText("red", `\n⛔ ${blocked}`))
       return false
     }
   }
@@ -281,10 +284,10 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
     for (const block of response.content) {
       if (block.type === "tool_use") {
         if (await checkPermission(block, rl)) {
-          console.log(`> ${block.name}(${JSON.stringify(block.input)})`)
+          console.log(styleText("cyan", `> ${block.name}(${JSON.stringify(block.input)})`))
           try {
             const result = await runTool(block.name, block.input as Record<string, unknown>)
-            console.log(result.slice(0, 200))
+            console.log(styleText("gray", result.slice(0, 200)))
             toolResults.push({
               type: "tool_result",
               tool_use_id: block.id,
@@ -316,7 +319,7 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
       model,
       max_tokens,
       tools,
-        messages,
+      messages,
       system
     })
   }
@@ -325,7 +328,7 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
   messages.push({ role: "assistant", content: response.content })
   for (const block of response.content) {
     if (block.type === "text") {
-      console.log(`Claude (${new Date().toISOString()}) >> ` + block.text)
+      console.log(styleText(["bold", "green"], `Claude (${new Date().toISOString()}) >> `) + block.text)
     }
   }
   // console.log(JSON.stringify(response, null, 2))
@@ -336,12 +339,15 @@ async function main() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
 
   console.log(
-    await figlet.text("Welcome To Learn CC!", {
-      horizontalLayout: "default",
-      verticalLayout: "default",
-      width: 120,
-      whitespaceBreak: true
-    })
+    styleText(
+      "cyan",
+      await figlet.text("Welcome To Learn CC!", {
+        horizontalLayout: "default",
+        verticalLayout: "default",
+        width: 120,
+        whitespaceBreak: true
+      })
+    )
   )
 
   while (true) {
@@ -354,7 +360,7 @@ async function main() {
       await agentLoop(msgHistory, rl)
     } catch (err) {
       // API failed (network, rate limit, bad key...): report it and keep the session alive
-      console.log(`\nAPI error: ${err instanceof Error ? err.message : String(err)}`)
+      console.log(styleText("red", `\nAPI error: ${err instanceof Error ? err.message : String(err)}`))
     }
   }
 
