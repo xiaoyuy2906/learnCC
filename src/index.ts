@@ -9,7 +9,6 @@ import os from "node:os"
 import { type ToolName } from "./toolset.js"
 import { readFile, mkdir, writeFile, glob } from "node:fs/promises"
 import { styleText } from "node:util"
-import type string from "figlet/fonts/babyface-lame"
 
 // console.log(process.env.ANTHROPIC_API_KEY)
 
@@ -298,6 +297,23 @@ function logHook(block: Anthropic.Messages.ToolUseBlock) {
 function contextInjectHook() {
   // UserPromptSubmit: log user input before it reaches the LLM
   console.log(styleText("cyan", `[HOOK] > UserPromptSubmit: working in ${workDir}`))
+}
+
+function largeOutputHook(block: Anthropic.Messages.ToolUseBlock, output: string) {
+  // PostToolUse: warn on large output.
+  if (output.length > 100000) {
+    console.log(styleText("cyan", `[HOOK] > ⚠ Large output from ${block.name}: ${output.length} chars`))
+  }
+  return
+}
+
+function summaryHook(messages: Anthropic.Messages.MessageParam[]) {
+  const toolCount = messages
+    .map(msg => msg.content)
+    .filter(content => Array.isArray(content))
+    .flat()
+    .reduce((acc, cur) => (cur.type == "tool_result" ? acc + 1 : acc), 0)
+  console.log(styleText("cyan", `[HOOK] > Stop: session used ${toolCount} tool calls`))
 }
 
 async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interface) {
