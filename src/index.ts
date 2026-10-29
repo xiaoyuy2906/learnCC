@@ -9,6 +9,7 @@ import os from "node:os"
 import { type ToolName } from "./toolset.js"
 import { readFile, mkdir, writeFile, glob } from "node:fs/promises"
 import { styleText } from "node:util"
+import type string from "figlet/fonts/babyface-lame"
 
 // console.log(process.env.ANTHROPIC_API_KEY)
 
@@ -264,6 +265,39 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<st
     return await toolHandlerMap[name](input) // 这里 name 是 ToolName 了
   }
   return `Error: Unknown tool: ${name}`
+}
+
+// s04: Hook System
+
+type HookEvent = "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop"
+
+const hooks: Record<HookEvent, any[]> = { UserPromptSubmit: [], PreToolUse: [], PostToolUse: [], Stop: [] }
+
+function registerHook(event: HookEvent, callback: (...args: never[]) => void) {
+  hooks[event].push(callback)
+}
+
+function triggerHooks(event: HookEvent, ...args: any[]) {
+  const reasons: string[] = []
+  for (const cb of hooks[event]) {
+    const result = cb(...args)
+    if (result !== undefined) {
+      reasons.push(result)
+    }
+  }
+  return reasons.length > 0 ? reasons.join("\n") : undefined
+}
+
+function logHook(block: Anthropic.Messages.ToolUseBlock) {
+  // PreToolUse: log every tool call.
+  const { name, input } = block
+  const argsPreview = JSON.stringify(Object.values(input as Record<string, unknown>).slice(0, 2)).slice(0, 80)
+  console.log(styleText("cyan", `[HOOK] > ${name}(${argsPreview})`))
+}
+
+function contextInjectHook() {
+  // UserPromptSubmit: log user input before it reaches the LLM
+  console.log(styleText("cyan", `[HOOK] > UserPromptSubmit: working in ${workDir}`))
 }
 
 async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interface) {
