@@ -124,28 +124,29 @@ async function askUser(
   return ["y", "yes"].includes(answer.trim().toLowerCase())
 }
 
-// Pipeline: Gate 1 -> Gate 2 -> Gate 3
-async function checkPermission(toolUseBlock: Anthropic.ToolUseBlock, rl: readline.Interface): Promise<boolean> {
-  const { name, input } = toolUseBlock as { name: ToolName; input: Record<string, unknown> }
+type DenyMessages = "Permission denied by deny list" | "Permission denied by user"
 
+// Pipeline: Gate 1 -> Gate 2 -> Gate 3
+async function permissionHook(
+  toolUseBlock: Anthropic.ToolUseBlock,
+  rl: readline.Interface
+): Promise<DenyMessages | undefined> {
+  const { name, input } = toolUseBlock as { name: ToolName; input: Record<string, unknown> }
   if (name === "bash") {
-    const command = input.command
-    if (typeof command !== "string") {
-      return false
-    }
+    const command = input.command as string
 
     const blocked = checkDenyList(command)
     if (blocked) {
       console.log(styleText("red", `\n⛔ ${blocked}`))
-      return false
+      return "Permission denied by deny list"
     }
   }
 
   const reason = checkRules(name, input)
   if (reason) {
-    return askUser(rl, name, input, reason)
+    const answer = await askUser(rl, name, input, reason)
+    return answer ? undefined : "Permission denied by user"
   }
-  return true
 }
 
 // s02: Tool Definitions & Dispatch
@@ -276,10 +277,10 @@ function registerHook(event: HookEvent, callback: (...args: never[]) => void) {
   hooks[event].push(callback)
 }
 
-function triggerHooks(event: HookEvent, ...args: any[]) {
+async function triggerHooks(event: HookEvent, ...args: any[]) {
   const reasons: string[] = []
   for (const cb of hooks[event]) {
-    const result = cb(...args)
+    const result = await cb(...args)
     if (result !== undefined) {
       reasons.push(result)
     }
@@ -289,8 +290,8 @@ function triggerHooks(event: HookEvent, ...args: any[]) {
 
 function logHook(block: Anthropic.Messages.ToolUseBlock) {
   // PreToolUse: log every tool call.
-  const { name, input } = block
-  const argsPreview = JSON.stringify(Object.values(input as Record<string, unknown>).slice(0, 2)).slice(0, 80)
+  const { name, input } = block as { name: ToolName; input: Record<string, unknown> }
+  const argsPreview = JSON.stringify(Object.values(input).slice(0, 2)).slice(0, 80)
   console.log(styleText("cyan", `[HOOK] > ${name}(${argsPreview})`))
 }
 
@@ -308,6 +309,7 @@ function largeOutputHook(block: Anthropic.Messages.ToolUseBlock, output: string)
 }
 
 function summaryHook(messages: Anthropic.Messages.MessageParam[]) {
+  // Stop hook: print summary when loop is about to exit
   const toolCount = messages
     .map(msg => msg.content)
     .filter(content => Array.isArray(content))
@@ -315,6 +317,12 @@ function summaryHook(messages: Anthropic.Messages.MessageParam[]) {
     .reduce((acc, cur) => (cur.type == "tool_result" ? acc + 1 : acc), 0)
   console.log(styleText("cyan", `[HOOK] > Stop: session used ${toolCount} tool calls`))
 }
+
+registerHook("UserPromptSubmit", contextInjectHook)
+registerHook("PreToolUse", logHook)
+registerHook("PreToolUse", permissionHook)
+registerHook("PostToolUse", largeOutputHook)
+registerHook("Stop", summaryHook)
 
 async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interface) {
   let response = await client.messages.create({
@@ -333,15 +341,17 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
 
     for (const block of response.content) {
       if (block.type === "tool_use") {
-        if (await checkPermission(block, rl)) {
-          console.log(styleText("cyan", `> ${block.name}(${JSON.stringify(block.input)})`))
+        const denyMessage = await triggerHooks("PreToolUse", block, rl)
+        if (!denyMessage) {
+          // console.log(styleText("cyan", `> ${block.name}(${JSON.stringify(block.input)})`))
           try {
             const result = await runTool(block.name, block.input as Record<string, unknown>)
             console.log(styleText("gray", result.slice(0, 200)))
+            await triggerHooks("PostToolUse", block, result)
             toolResults.push({
               type: "tool_result",
               tool_use_id: block.id,
-              content: JSON.stringify(result)
+              content: result
             })
           } catch (err) {
             // Signal failure so Claude can retry or ask for clarification.
@@ -356,7 +366,7 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
-            content: "Permission denied."
+            content: denyMessage
           })
         }
       }
