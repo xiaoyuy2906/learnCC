@@ -25,7 +25,7 @@ const environmentPrompt =
     ? "Windows: the bash tool runs through cmd.exe; use cmd.exe syntax, not Unix Bash or PowerShell syntax, and prefer dedicated file tools for file operations"
     : "Unix-like: the bash tool runs the system shell"
 
-const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. All destructive operations require user approval.`
+const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Use tools to solve tasks. Act, don't explain.`
 
 // s03: Three-Gate Permission Pipeline
 
@@ -295,7 +295,7 @@ function logHook(block: Anthropic.Messages.ToolUseBlock) {
   console.log(styleText("cyan", `[HOOK] > ${name}(${argsPreview})`))
 }
 
-function contextInjectHook() {
+function contextInjectHook(input: string) {
   // UserPromptSubmit: log user input before it reaches the LLM
   console.log(styleText("cyan", `[HOOK] > UserPromptSubmit: working in ${workDir}`))
 }
@@ -325,18 +325,42 @@ registerHook("PostToolUse", largeOutputHook)
 registerHook("Stop", summaryHook)
 
 async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interface) {
-  let response = await client.messages.create({
-    model,
-    max_tokens,
-    tools,
-    messages,
-    system
-  })
+  // One user turn: call Claude, run the tools it asks for, send the results back, repeat.
+  // Ends when Claude stops asking for tools and no Stop hook forces it to continue.
+  while (true) {
+    const response = await client.messages.create({
+      model,
+      max_tokens,
+      tools,
+      messages,
+      system
+    })
 
-  // Loop until Claude stops asking for tools. Each iteration runs every requested
-  // tool (Claude may ask for several at once), appends all results to history in
-  // one user message, and asks Claude to continue.
-  while (response.stop_reason === "tool_use") {
+    messages.push({ role: "assistant", content: response.content })
+
+    // Only "tool_use" means Claude is waiting for tool results. Every other stop_reason
+    // ("end_turn", "max_tokens", "refusal", ...) means this turn is over, so check
+    // != "tool_use" instead of === "end_turn" to catch all of them.
+    if (response.stop_reason != "tool_use") {
+      // Print the answer before the Stop hook runs, so every forced extra turn is shown too.
+      for (const block of response.content) {
+        if (block.type === "text") {
+          console.log(styleText(["bold", "green"], `Claude (${new Date().toISOString()}) >> `) + block.text)
+        }
+      }
+
+      // Stop hook can veto stopping: a returned string is sent back as a user message
+      // and the loop calls the API again. undefined means Claude may stop.
+      const force = await triggerHooks("Stop", messages)
+      if (force) {
+        messages.push({ role: "user", content: force })
+        continue
+      }
+      return
+    }
+
+    // Run every tool Claude asked for (it may ask for several at once). A PreToolUse hook
+    // can deny a call; the deny reason goes back as the tool_result so Claude knows why.
     const toolResults: Anthropic.ToolResultBlockParam[] = []
 
     for (const block of response.content) {
@@ -371,27 +395,11 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
         }
       }
     }
-
-    messages.push({ role: "assistant", content: response.content })
+    // All results go back in one user message; the next iteration sends them to Claude.
     messages.push({ role: "user", content: toolResults })
 
-    response = await client.messages.create({
-      model,
-      max_tokens,
-      tools,
-      messages,
-      system
-    })
+    // console.log(JSON.stringify(response, null, 2))
   }
-
-  // Claude stopped calling tools: save its final turn and print the text.
-  messages.push({ role: "assistant", content: response.content })
-  for (const block of response.content) {
-    if (block.type === "text") {
-      console.log(styleText(["bold", "green"], `Claude (${new Date().toISOString()}) >> `) + block.text)
-    }
-  }
-  // console.log(JSON.stringify(response, null, 2))
 }
 
 async function main() {
@@ -411,10 +419,11 @@ async function main() {
   )
 
   while (true) {
-    const input = await rl.question(`s03 (${new Date().toISOString()}) >> `)
+    const input = await rl.question(`s04 (${new Date().toISOString()}) >> `)
     if (["q", "exit", ""].includes(input.trim().toLowerCase())) {
       break
     }
+    await triggerHooks("UserPromptSubmit", input)
     msgHistory.push({ role: "user", content: input })
     try {
       await agentLoop(msgHistory, rl)
