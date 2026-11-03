@@ -90,9 +90,38 @@ const globTool = {
   }
 } satisfies Anthropic.Tool
 
-const tools = [runBashTool, readFileTool, writeFileTool, editFileTool, globTool]
+const todoWrite = {
+  name: "todoWrite" as const,
+  description: "Create and manage a task list for your current coding session.",
+  input_schema: {
+    type: "object",
+    properties: {
+      todos: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            content: { type: "string" },
+            status: { enum: ["completed", "in_progress", "pending"] }
+          },
+          required: ["content", "status"] as const
+        }
+      }
+    },
+    required: ["todos"] as const
+  }
+} satisfies Anthropic.Tool
+
+const tools = [runBashTool, readFileTool, writeFileTool, editFileTool, globTool, todoWrite]
 
 export type ToolName = (typeof tools)[number]["name"]
-// ToolName is now "bash" | "readFile" | "writeFile" | "editFile" | "glob"
+// ToolName is now "bash" | "readFile" | "writeFile" | "editFile" | "glob" | "todoWrite"
+
+interface TodoType {
+  content: string
+  status: "completed" | "in_progress" | "pending"
+}
+
+export type TodoList = TodoType[]
 
 export default tools

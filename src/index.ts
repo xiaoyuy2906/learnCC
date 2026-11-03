@@ -6,7 +6,7 @@ import path from "node:path"
 import "dotenv/config"
 import tools from "./toolset.js"
 import os from "node:os"
-import { type ToolName } from "./toolset.js"
+import { type ToolName, type TodoList } from "./toolset.js"
 import { readFile, mkdir, writeFile, glob } from "node:fs/promises"
 import { styleText } from "node:util"
 
@@ -243,6 +243,29 @@ async function runGlob(input: Record<string, unknown>) {
     return result.join("\n") || "(no matches)"
   } catch (e) {
     return `Error: ${e}`
+  }
+}
+
+const todoList: TodoList = []
+
+function updateTodoList(todos: TodoList | string) {
+  if (typeof todos == "string") {
+    try {
+      todos = JSON.parse(todos)
+    } catch (e) {
+      throw new Error("todos must be an array or a JSON array string")
+    }
+  }
+
+  if (!Array.isArray(todos)) {
+    throw new Error("todos must be an array")
+  }
+
+  if (todos.length > 20) {
+    throw new Error("Max 20 todos allowed")
+  }
+
+  for (const [index, todo] of Object.entries(todos)) {
   }
 }
 
