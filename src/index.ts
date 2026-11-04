@@ -246,9 +246,9 @@ async function runGlob(input: Record<string, unknown>) {
   }
 }
 
-const todoList: TodoList = []
+let todoList: TodoList = []
 
-function updateTodoList(todos: TodoList | string) {
+function validateTodoList(todos: TodoList | string) {
   if (typeof todos == "string") {
     try {
       todos = JSON.parse(todos)
@@ -265,7 +265,43 @@ function updateTodoList(todos: TodoList | string) {
     throw new Error("Max 20 todos allowed")
   }
 
+  const validated: TodoList = []
+  let count = 0
+
   for (const [index, todo] of Object.entries(todos)) {
+    if (typeof todo == "object" && todo != null && !Array.isArray(todo)) {
+      const content = String(todo.content ?? "").trim()
+      const status = String(todo.status ?? "pending").toLowerCase()
+      if (!content) {
+        throw new Error(`todos[${index}] requires content`)
+      }
+      if (!["pending", "in_progress", "completed"].includes(status)) {
+        throw new Error(`todos[${index}] has invalid status ${status}`)
+      }
+      if (status == "in_progress") {
+        count++
+      }
+      validated.push({
+        content,
+        status: status as TodoList[number]["status"]
+      })
+    } else {
+      throw new Error(`todos[${index}] must be an object`)
+    }
+  }
+
+  if (count > 1) {
+    throw new Error("Only one todo can be in_progress at a time")
+  }
+
+  return validated
+}
+
+function runTodoWrite(input: Record<string, unknown>) {
+  try {
+    todoList = validateTodoList(input.todos as TodoList)
+  } catch (e) {
+    return `Error: ${e}`
   }
 }
 
@@ -274,7 +310,8 @@ const toolHandlerMap = {
   readFile: runRead,
   writeFile: runWrite,
   editFile: runEdit,
-  glob: runGlob
+  glob: runGlob,
+  todoWrite: runTodoWrite
 } satisfies {
   [key in ToolName]: ToolHandler
 }
