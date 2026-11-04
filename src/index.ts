@@ -197,7 +197,7 @@ async function runRead(input: Record<string, unknown>) {
     }
     return lines.join("\n") || "(empty file)"
   } catch (e) {
-    return `Error: ${e}`
+    return `Error: ${e instanceof Error ? e.message : String(e)}`
   }
 }
 
@@ -209,7 +209,7 @@ async function runWrite(input: Record<string, unknown>) {
     await writeFile(filePath, content)
     return `Wrote ${content.length} bytes to ${filePath}`
   } catch (e) {
-    return `Error: ${e}`
+    return `Error: ${e instanceof Error ? e.message : String(e)}`
   }
 }
 
@@ -229,7 +229,7 @@ async function runEdit(input: Record<string, unknown>) {
       return `Error: Text not found in ${filePath}`
     }
   } catch (e) {
-    return `Error: ${e}`
+    return `Error: ${e instanceof Error ? e.message : String(e)}`
   }
 }
 
@@ -242,7 +242,7 @@ async function runGlob(input: Record<string, unknown>) {
     }
     return result.join("\n") || "(no matches)"
   } catch (e) {
-    return `Error: ${e}`
+    return `Error: ${e instanceof Error ? e.message : String(e)}`
   }
 }
 
@@ -298,10 +298,28 @@ function validateTodoList(todos: TodoList | string) {
 }
 
 function runTodoWrite(input: Record<string, unknown>) {
+  function renderTodos() {
+    if (todoList.length === 0) {
+      return "No todos."
+    }
+    const markerMap = {
+      pending: "[ ]",
+      in_progress: "[>]",
+      completed: "[x]"
+    }
+    const doneCount = todoList.filter(todo => todo.status == "completed").length
+    const lines = todoList.map(todo => `${markerMap[todo.status]} ${todo.content}`)
+    lines.push(`\n(${doneCount}/${todoList.length} completed)`)
+    return lines.join("\n")
+  }
+
   try {
-    todoList = validateTodoList(input.todos as TodoList)
+    todoList = validateTodoList(input.todos as TodoList | string)
+    const output = renderTodos()
+
+    return output
   } catch (e) {
-    return `Error: ${e}`
+    return `Error: ${e instanceof Error ? e.message : String(e)}`
   }
 }
 
