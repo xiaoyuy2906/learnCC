@@ -25,7 +25,7 @@ const environmentPrompt =
     ? "Windows: the bash tool runs through cmd.exe; use cmd.exe syntax, not Unix Bash or PowerShell syntax, and prefer dedicated file tools for file operations"
     : "Unix-like: the bash tool runs the system shell"
 
-const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Use tools to solve tasks. Act, don't explain.`
+const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Before starting any multi-step task, use todoWrite to plan your steps. Update status as you go.`
 
 // s03: Three-Gate Permission Pipeline
 
@@ -298,14 +298,21 @@ function validateTodoList(todos: TodoList | string) {
 }
 
 function runTodoWrite(input: Record<string, unknown>) {
+  const markerMap = {
+    pending: "[ ]",
+    in_progress: "[>]",
+    completed: "[x]"
+  } as const
+
+  const colorMap = {
+    pending: "gray",
+    in_progress: "cyan",
+    completed: "green"
+  } as const
+
   function renderTodos() {
     if (todoList.length === 0) {
       return "No todos."
-    }
-    const markerMap = {
-      pending: "[ ]",
-      in_progress: "[>]",
-      completed: "[x]"
     }
     const doneCount = todoList.filter(todo => todo.status == "completed").length
     const lines = todoList.map(todo => `${markerMap[todo.status]} ${todo.content}`)
@@ -313,13 +320,21 @@ function runTodoWrite(input: Record<string, unknown>) {
     return lines.join("\n")
   }
 
+  function printTodos() {
+    console.log(styleText(["bold", "yellow"], "\n## Current Tasks"))
+    for (const todo of todoList) {
+      console.log(styleText(colorMap[todo.status], `${markerMap[todo.status]} ${todo.content}`))
+    }
+  }
+
   try {
     todoList = validateTodoList(input.todos as TodoList | string)
-    const output = renderTodos()
-
-    return output
+    printTodos()
+    return renderTodos()
   } catch (e) {
-    return `Error: ${e instanceof Error ? e.message : String(e)}`
+    const errMsg = `Error: ${e instanceof Error ? e.message : String(e)}`
+    console.log(styleText("red", errMsg))
+    return errMsg
   }
 }
 
@@ -403,8 +418,9 @@ registerHook("PostToolUse", largeOutputHook)
 registerHook("Stop", summaryHook)
 
 async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interface) {
-  // One user turn: call Claude, run the tools it asks for, send the results back, repeat.
-  // Ends when Claude stops asking for tools and no Stop hook forces it to continue.
+  let roundSinceLastTodo: number = 0
+
+  // Each round: call Claude, run its tools, send the results back.
   while (true) {
     const response = await client.messages.create({
       model,
@@ -416,19 +432,16 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
 
     messages.push({ role: "assistant", content: response.content })
 
-    // Only "tool_use" means Claude is waiting for tool results. Every other stop_reason
-    // ("end_turn", "max_tokens", "refusal", ...) means this turn is over, so check
-    // != "tool_use" instead of === "end_turn" to catch all of them.
+    // Any stop_reason other than "tool_use" ends this turn.
     if (response.stop_reason != "tool_use") {
-      // Print the answer before the Stop hook runs, so every forced extra turn is shown too.
+      // Print before the Stop hook, so forced extra rounds are shown too.
       for (const block of response.content) {
         if (block.type === "text") {
           console.log(styleText(["bold", "green"], `Claude (${new Date().toISOString()}) >> `) + block.text)
         }
       }
 
-      // Stop hook can veto stopping: a returned string is sent back as a user message
-      // and the loop calls the API again. undefined means Claude may stop.
+      // A Stop hook can return a string to force another round.
       const force = await triggerHooks("Stop", messages)
       if (force) {
         messages.push({ role: "user", content: force })
@@ -437,26 +450,32 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
       return
     }
 
-    // Run every tool Claude asked for (it may ask for several at once). A PreToolUse hook
-    // can deny a call; the deny reason goes back as the tool_result so Claude knows why.
+    // Run every tool call in this response. A denied call still gets a tool_result.
     const toolResults: Anthropic.ToolResultBlockParam[] = []
-
+    let usedTodo: boolean = false
     for (const block of response.content) {
       if (block.type === "tool_use") {
         const denyMessage = await triggerHooks("PreToolUse", block, rl)
         if (!denyMessage) {
-          // console.log(styleText("cyan", `> ${block.name}(${JSON.stringify(block.input)})`))
           try {
             const result = await runTool(block.name, block.input as Record<string, unknown>)
-            console.log(styleText("gray", result.slice(0, 200)))
+
+            if (block.name != "todoWrite") {
+              console.log(styleText("gray", result.slice(0, 200)))
+            }
             await triggerHooks("PostToolUse", block, result)
+
+            if (block.name == "todoWrite") {
+              usedTodo = true
+            }
+
             toolResults.push({
               type: "tool_result",
               tool_use_id: block.id,
               content: result
             })
           } catch (err) {
-            // Signal failure so Claude can retry or ask for clarification.
+            // Tell Claude the tool failed so it can retry.
             toolResults.push({
               type: "tool_result",
               tool_use_id: block.id,
@@ -473,10 +492,19 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
         }
       }
     }
-    // All results go back in one user message; the next iteration sends them to Claude.
-    messages.push({ role: "user", content: toolResults })
 
-    // console.log(JSON.stringify(response, null, 2))
+    // Send all results in one user message. After 3 rounds without todoWrite, add a reminder.
+    usedTodo ? (roundSinceLastTodo = 0) : roundSinceLastTodo++
+    if (roundSinceLastTodo >= 3) {
+      const todoReminder: Anthropic.TextBlockParam = {
+        type: "text",
+        text: "<reminder>Update your todos.</reminder>"
+      }
+      roundSinceLastTodo = 0
+      messages.push({ role: "user", content: [...toolResults, todoReminder] })
+    } else {
+      messages.push({ role: "user", content: toolResults })
+    }
   }
 }
 
@@ -497,7 +525,7 @@ async function main() {
   )
 
   while (true) {
-    const input = await rl.question(`s04 (${new Date().toISOString()}) >> `)
+    const input = await rl.question(`s05 (${new Date().toISOString()}) >> `)
     if (["q", "exit", ""].includes(input.trim().toLowerCase())) {
       break
     }

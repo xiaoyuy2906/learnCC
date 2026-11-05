@@ -102,7 +102,7 @@ const todoWrite = {
           type: "object",
           properties: {
             content: { type: "string" },
-            status: { enum: ["completed", "in_progress", "pending"] }
+            status: { type: "string", enum: ["completed", "in_progress", "pending"] }
           },
           required: ["content", "status"] as const
         }
