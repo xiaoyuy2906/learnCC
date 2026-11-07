@@ -8,7 +8,10 @@ const runBashTool = {
   input_schema: {
     type: "object" as const,
     properties: {
-      command: { type: "string", description: "The command for bash to run." }
+      command: {
+        type: "string",
+        description: "The command for bash to run."
+      }
     },
     required: ["command"] as const
   }
@@ -112,9 +115,27 @@ const todoWrite = {
   }
 } satisfies Anthropic.Tool
 
-const tools = [runBashTool, readFileTool, writeFileTool, editFileTool, globTool, todoWrite]
+const taskTool = {
+  name: "task" as const,
+  description:
+    "Launch a subagent with fresh conversation context to handle a complex subtask. Returns only the final conclusion.",
+  input_schema: {
+    type: "object",
+    properties: {
+      prompt: {
+        type: "string"
+      }
+    },
+    required: ["prompt"]
+  }
+} satisfies Anthropic.Tool
 
-export type ToolName = (typeof tools)[number]["name"]
+export const subTools = [runBashTool, readFileTool, writeFileTool, editFileTool, globTool, todoWrite]
+
+export const baseTools = [...subTools, taskTool]
+
+export type SubToolName = (typeof subTools)[number]["name"]
+export type BaseToolName = (typeof baseTools)[number]["name"]
 // ToolName is now "bash" | "readFile" | "writeFile" | "editFile" | "glob" | "todoWrite"
 
 interface TodoType {
@@ -123,5 +144,3 @@ interface TodoType {
 }
 
 export type TodoList = TodoType[]
-
-export default tools
