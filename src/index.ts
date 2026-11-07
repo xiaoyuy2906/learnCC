@@ -1,31 +1,18 @@
 import Anthropic from "@anthropic-ai/sdk"
-import { execSync } from "child_process"
 import * as readline from "node:readline/promises"
 import figlet from "figlet"
 import path from "node:path"
 import "dotenv/config"
-import tools from "./toolset.js"
-import os from "node:os"
-import { type ToolName, type TodoList } from "./toolset.js"
-import { readFile, mkdir, writeFile, glob } from "node:fs/promises"
+import { baseTools, subTools, type SubToolName } from "./toolset.js"
+import { type BaseToolName, type TodoList } from "./toolset.js"
+import { runBash, runEdit, runGlob, runRead, runWrite, runTodoWrite } from "./toolHandlers.js"
+import { type ToolHandler } from "./toolHandlers.js"
 import { styleText } from "node:util"
-
-// console.log(process.env.ANTHROPIC_API_KEY)
+import { workDir, model, max_tokens, system, subSystem } from "./config.js"
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY
 })
-
-const workDir = process.cwd()
-const model = process.env.MODEL_ID || "claude-sonnet-4-6"
-const max_tokens = 9216
-
-const environmentPrompt =
-  os.platform() === "win32"
-    ? "Windows: the bash tool runs through cmd.exe; use cmd.exe syntax, not Unix Bash or PowerShell syntax, and prefer dedicated file tools for file operations"
-    : "Unix-like: the bash tool runs the system shell"
-
-const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Before starting any multi-step task, use todoWrite to plan your steps. Update status as you go.`
 
 // s03: Three-Gate Permission Pipeline
 
@@ -82,7 +69,7 @@ function checkDenyList(command: string) {
 const destructiveCmd = /(^|[\s;&|(])(rm|del|erase|rmdir|rd|Remove-Item)\s/i
 
 interface Rule {
-  toolsName: ToolName[]
+  toolsName: BaseToolName[]
   check: (input: Record<string, unknown>) => boolean
   message: string
 }
@@ -103,7 +90,7 @@ const permissionRules: Rule[] = [
   }
 ]
 
-function checkRules(name: ToolName, input: Record<string, unknown>) {
+function checkRules(name: BaseToolName, input: Record<string, unknown>) {
   for (const rule of permissionRules) {
     if (rule.toolsName.includes(name) && rule.check(input)) {
       return rule.message
@@ -114,7 +101,7 @@ function checkRules(name: ToolName, input: Record<string, unknown>) {
 //  Gate 3: User approval — wait for confirmation after rule match
 async function askUser(
   rl: readline.Interface,
-  name: ToolName,
+  name: BaseToolName,
   input: Record<string, unknown>,
   reason: string
 ): Promise<boolean> {
@@ -131,7 +118,7 @@ async function permissionHook(
   toolUseBlock: Anthropic.ToolUseBlock,
   rl: readline.Interface
 ): Promise<DenyMessages | undefined> {
-  const { name, input } = toolUseBlock as { name: ToolName; input: Record<string, unknown> }
+  const { name, input } = toolUseBlock as { name: BaseToolName; input: Record<string, unknown> }
   if (name === "bash") {
     const command = input.command as string
 
@@ -151,211 +138,52 @@ async function permissionHook(
 
 // s02: Tool Definitions & Dispatch
 
-type ToolHandler = (input: Record<string, unknown>) => string | Promise<string>
-
-function checkPath(p: string): string {
-  const resolvedPath = path.resolve(workDir, p)
-  if (resolvedPath.startsWith(workDir + path.sep)) {
-    return p
-  } else {
-    throw new Error(`Path escapes workspace: ${p}`)
-  }
+const baseToolHandlerMap = {
+  bash: runBash,
+  readFile: runRead,
+  writeFile: runWrite,
+  editFile: runEdit,
+  glob: runGlob,
+  todoWrite: runTodoWrite,
+  task: spawnSubagent
+} satisfies {
+  [key in BaseToolName]: ToolHandler
 }
 
-function runBash(input: Record<string, unknown>) {
-  const command = input.command as string
-  // const dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
-  // if (dangerous.some(it => (command as string).includes(it))) {
-  //   // ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"].some(it=>('sudo rm -rf /').includes(it))
-  //   return "Error: Dangerous command blocked"
-  // }
-  try {
-    const result = execSync(command, {
-      cwd: process.cwd(),
-      timeout: 120000,
-      encoding: "utf-8"
-    })
-    return result.slice(0, max_tokens) || "(no output)"
-  } catch (e: any) {
-    if (e.code === "ETIMEDOUT") {
-      return "Error: Timeout (120s)"
-    }
-    // Many tools (tsc, test runners) print the failure reason to stdout, so return both streams
-    const output = `${e.stdout ?? ""}${e.stderr ?? ""}`.trim()
-    return `Error: ${output || e.message}`.slice(0, max_tokens)
-  }
-}
-
-async function runRead(input: Record<string, unknown>) {
-  const limit = input.limit as number | undefined | null
-  try {
-    const filePath = checkPath(input.path as string)
-    const contents = await readFile(filePath, { encoding: "utf8" })
-    let lines = contents.split("\n")
-    if (limit && limit < lines.length) {
-      lines = lines.slice(0, limit).concat(`... (${lines.length - limit} more lines)`)
-    }
-    return lines.join("\n") || "(empty file)"
-  } catch (e) {
-    return `Error: ${e instanceof Error ? e.message : String(e)}`
-  }
-}
-
-async function runWrite(input: Record<string, unknown>) {
-  const content = input.content as string
-  try {
-    const filePath = checkPath(input.path as string)
-    await mkdir(path.dirname(filePath), { recursive: true })
-    await writeFile(filePath, content)
-    return `Wrote ${content.length} bytes to ${filePath}`
-  } catch (e) {
-    return `Error: ${e instanceof Error ? e.message : String(e)}`
-  }
-}
-
-async function runEdit(input: Record<string, unknown>) {
-  const oldText = input.oldText as string
-  const newText = input.newText as string
-  try {
-    const filePath = checkPath(input.path as string)
-    const contents = await readFile(filePath, { encoding: "utf8" })
-    if (contents.includes(oldText)) {
-      await writeFile(
-        filePath,
-        contents.replace(oldText, () => newText)
-      )
-      return `Edited ${filePath}`
-    } else {
-      return `Error: Text not found in ${filePath}`
-    }
-  } catch (e) {
-    return `Error: ${e instanceof Error ? e.message : String(e)}`
-  }
-}
-
-async function runGlob(input: Record<string, unknown>) {
-  const pattern = input.pattern as string
-  const result = []
-  try {
-    for await (const entry of glob(pattern, { cwd: workDir })) {
-      result.push(checkPath(entry))
-    }
-    return result.join("\n") || "(no matches)"
-  } catch (e) {
-    return `Error: ${e instanceof Error ? e.message : String(e)}`
-  }
-}
-
-let todoList: TodoList = []
-
-function validateTodoList(todos: TodoList | string) {
-  if (typeof todos == "string") {
-    try {
-      todos = JSON.parse(todos)
-    } catch (e) {
-      throw new Error("todos must be an array or a JSON array string")
-    }
-  }
-
-  if (!Array.isArray(todos)) {
-    throw new Error("todos must be an array")
-  }
-
-  if (todos.length > 20) {
-    throw new Error("Max 20 todos allowed")
-  }
-
-  const validated: TodoList = []
-  let count = 0
-
-  for (const [index, todo] of Object.entries(todos)) {
-    if (typeof todo == "object" && todo != null && !Array.isArray(todo)) {
-      const content = String(todo.content ?? "").trim()
-      const status = String(todo.status ?? "pending").toLowerCase()
-      if (!content) {
-        throw new Error(`todos[${index}] requires content`)
-      }
-      if (!["pending", "in_progress", "completed"].includes(status)) {
-        throw new Error(`todos[${index}] has invalid status ${status}`)
-      }
-      if (status == "in_progress") {
-        count++
-      }
-      validated.push({
-        content,
-        status: status as TodoList[number]["status"]
-      })
-    } else {
-      throw new Error(`todos[${index}] must be an object`)
-    }
-  }
-
-  if (count > 1) {
-    throw new Error("Only one todo can be in_progress at a time")
-  }
-
-  return validated
-}
-
-function runTodoWrite(input: Record<string, unknown>) {
-  const markerMap = {
-    pending: "[ ]",
-    in_progress: "[>]",
-    completed: "[x]"
-  } as const
-
-  const colorMap = {
-    pending: "gray",
-    in_progress: "cyan",
-    completed: "green"
-  } as const
-
-  function renderTodos() {
-    if (todoList.length === 0) {
-      return "No todos."
-    }
-    const doneCount = todoList.filter(todo => todo.status == "completed").length
-    const lines = todoList.map(todo => `${markerMap[todo.status]} ${todo.content}`)
-    lines.push(`\n(${doneCount}/${todoList.length} completed)`)
-    return lines.join("\n")
-  }
-
-  function printTodos() {
-    console.log(styleText(["bold", "yellow"], "\n## Current Tasks"))
-    for (const todo of todoList) {
-      console.log(styleText(colorMap[todo.status], `${markerMap[todo.status]} ${todo.content}`))
-    }
-  }
-
-  try {
-    todoList = validateTodoList(input.todos as TodoList | string)
-    printTodos()
-    return renderTodos()
-  } catch (e) {
-    const errMsg = `Error: ${e instanceof Error ? e.message : String(e)}`
-    console.log(styleText("red", errMsg))
-    return errMsg
-  }
-}
-
-const toolHandlerMap = {
+const subToolHandlerMap = {
   bash: runBash,
   readFile: runRead,
   writeFile: runWrite,
   editFile: runEdit,
   glob: runGlob,
   todoWrite: runTodoWrite
-} satisfies {
-  [key in ToolName]: ToolHandler
+} satisfies Record<SubToolName, ToolHandler>
+
+async function spawnSubagent(input: Record<string, unknown>) {
+  console.log(styleText("magenta", "\n[Subagent spawned]"))
+  const prompt = input.prompt as string
+  const messages: Anthropic.MessageParam[] = [{ role: "user", content: prompt }]
+
+  for (let i = 0; i < 30; i++) {
+    const response = await client.messages.create({
+      model,
+      max_tokens,
+      tools: subTools,
+      messages,
+      system: subSystem
+    })
+
+    messages.push({ role: "assistant", content: response.content })
+  }
 }
 
-function isToolName(name: string): name is ToolName {
-  return Object.hasOwn(toolHandlerMap, name)
+function isToolName(name: string): name is BaseToolName {
+  return Object.hasOwn(baseToolHandlerMap, name)
 }
 
 async function runTool(name: string, input: Record<string, unknown>): Promise<string> {
   if (isToolName(name)) {
-    return await toolHandlerMap[name](input) // 这里 name 是 ToolName 了
+    return await baseToolHandlerMap[name](input) // 这里 name 是 ToolName 了
   }
   return `Error: Unknown tool: ${name}`
 }
@@ -383,7 +211,7 @@ async function triggerHooks(event: HookEvent, ...args: any[]) {
 
 function logHook(block: Anthropic.Messages.ToolUseBlock) {
   // PreToolUse: log every tool call.
-  const { name, input } = block as { name: ToolName; input: Record<string, unknown> }
+  const { name, input } = block as { name: BaseToolName; input: Record<string, unknown> }
   const argsPreview = JSON.stringify(Object.values(input).slice(0, 2)).slice(0, 80)
   console.log(styleText("cyan", `[HOOK] > ${name}(${argsPreview})`))
 }
@@ -425,7 +253,7 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
     const response = await client.messages.create({
       model,
       max_tokens,
-      tools,
+      tools: baseTools,
       messages,
       system
     })
