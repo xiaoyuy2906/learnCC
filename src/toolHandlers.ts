@@ -1,15 +1,14 @@
 import path from "node:path"
 import { styleText } from "node:util"
 import { readFile, mkdir, writeFile, glob } from "node:fs/promises"
+import * as readline from "node:readline/promises"
 import { execSync } from "child_process"
 import { workDir, max_tokens } from "./config.js"
 import { type TodoList } from "./toolset.js"
 
 // s02: Tool Definitions & Dispatch
 
-type ToolHandler = (input: Record<string, unknown>) => string | Promise<string>
-
-let todoList: TodoList = []
+type ToolHandler = (input: Record<string, unknown>, rl: readline.Interface) => string | Promise<string>
 
 function checkPath(p: string): string {
   const resolvedPath = path.resolve(workDir, p)
@@ -153,47 +152,52 @@ function validateTodoList(todos: TodoList | string) {
   return validated
 }
 
-function runTodoWrite(input: Record<string, unknown>) {
-  const markerMap = {
-    pending: "[ ]",
-    in_progress: "[>]",
-    completed: "[x]"
-  } as const
+// Each call creates its own todoList (closure), so agents don't share one.
+function createTodoWrite() {
+  let todoList: TodoList = []
 
-  const colorMap = {
-    pending: "gray",
-    in_progress: "cyan",
-    completed: "green"
-  } as const
+  return function runTodoWrite(input: Record<string, unknown>) {
+    const markerMap = {
+      pending: "[ ]",
+      in_progress: "[>]",
+      completed: "[x]"
+    } as const
 
-  function renderTodos() {
-    if (todoList.length === 0) {
-      return "No todos."
+    const colorMap = {
+      pending: "gray",
+      in_progress: "cyan",
+      completed: "green"
+    } as const
+
+    function renderTodos() {
+      if (todoList.length === 0) {
+        return "No todos."
+      }
+      const doneCount = todoList.filter(todo => todo.status == "completed").length
+      const lines = todoList.map(todo => `${markerMap[todo.status]} ${todo.content}`)
+      lines.push(`\n(${doneCount}/${todoList.length} completed)`)
+      return lines.join("\n")
     }
-    const doneCount = todoList.filter(todo => todo.status == "completed").length
-    const lines = todoList.map(todo => `${markerMap[todo.status]} ${todo.content}`)
-    lines.push(`\n(${doneCount}/${todoList.length} completed)`)
-    return lines.join("\n")
-  }
 
-  function printTodos() {
-    console.log(styleText(["bold", "yellow"], "\n## Current Tasks"))
-    for (const todo of todoList) {
-      console.log(styleText(colorMap[todo.status], `${markerMap[todo.status]} ${todo.content}`))
+    function printTodos() {
+      console.log(styleText(["bold", "yellow"], "\n## Current Tasks"))
+      for (const todo of todoList) {
+        console.log(styleText(colorMap[todo.status], `${markerMap[todo.status]} ${todo.content}`))
+      }
     }
-  }
 
-  try {
-    todoList = validateTodoList(input.todos as TodoList | string)
-    printTodos()
-    return renderTodos()
-  } catch (e) {
-    const errMsg = `Error: ${e instanceof Error ? e.message : String(e)}`
-    console.log(styleText("red", errMsg))
-    return errMsg
+    try {
+      todoList = validateTodoList(input.todos as TodoList | string)
+      printTodos()
+      return renderTodos()
+    } catch (e) {
+      const errMsg = `Error: ${e instanceof Error ? e.message : String(e)}`
+      console.log(styleText("red", errMsg))
+      return errMsg
+    }
   }
 }
 
-export { runBash, runEdit, runGlob, runRead, runWrite, runTodoWrite }
+export { runBash, runEdit, runGlob, runRead, runWrite, createTodoWrite }
 
 export { type ToolHandler }
