@@ -5,7 +5,7 @@ import path from "node:path"
 import "dotenv/config"
 import { baseTools, subTools, type SubToolName } from "./toolset.js"
 import { type BaseToolName, type TodoList } from "./toolset.js"
-import { runBash, runEdit, runGlob, runRead, runWrite, runTodoWrite } from "./toolHandlers.js"
+import { runBash, runEdit, runGlob, runRead, runWrite, createTodoWrite } from "./toolHandlers.js"
 import { type ToolHandler } from "./toolHandlers.js"
 import { styleText } from "node:util"
 import { workDir, model, max_tokens, system, subSystem } from "./config.js"
@@ -144,7 +144,7 @@ const baseToolHandlerMap = {
   writeFile: runWrite,
   editFile: runEdit,
   glob: runGlob,
-  todoWrite: runTodoWrite,
+  todoWrite: createTodoWrite(), // parent's own todo list
   task: spawnSubagent
 } satisfies {
   [key in BaseToolName]: ToolHandler
@@ -156,13 +156,37 @@ const subToolHandlerMap = {
   writeFile: runWrite,
   editFile: runEdit,
   glob: runGlob,
-  todoWrite: runTodoWrite
+  todoWrite: createTodoWrite() // placeholder for satisfies; spawnSubagent replaces it
 } satisfies Record<SubToolName, ToolHandler>
 
-async function spawnSubagent(input: Record<string, unknown>) {
+async function executeTool(
+  block: Anthropic.Messages.ToolUseBlock,
+  handlers: typeof subToolHandlerMap,
+  rl: readline.Interface
+) {
+  const denyMessage = await triggerHooks("PreToolUse", block, rl)
+  if (!denyMessage) {
+    try {
+      const result = await runTool(block.name, block.input as Record<string, unknown>, handlers, rl)
+      await triggerHooks("PostToolUse", block, result)
+      return result
+    } catch (err) {
+      throw err
+    }
+  } else {
+    return denyMessage
+  }
+}
+
+async function spawnSubagent(input: Record<string, unknown>, rl: readline.Interface) {
   console.log(styleText("magenta", "\n[Subagent spawned]"))
   const prompt = input.prompt as string
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: prompt }]
+  // fresh todo list per subagent
+  const thisHandler = {
+    ...subToolHandlerMap,
+    todoWrite: createTodoWrite()
+  } satisfies Record<SubToolName, ToolHandler>
 
   for (let i = 0; i < 30; i++) {
     const response = await client.messages.create({
@@ -174,16 +198,66 @@ async function spawnSubagent(input: Record<string, unknown>) {
     })
 
     messages.push({ role: "assistant", content: response.content })
+
+    // Any stop_reason other than "tool_use" ends this turn.
+    if (response.stop_reason != "tool_use") {
+      // A Stop hook can return a string to force another round.
+      const force = await triggerHooks("Stop", messages)
+      if (force) {
+        messages.push({ role: "user", content: force })
+        continue
+      }
+      console.log(styleText("magenta", "[Subagent done]"))
+      return extractText(response.content) || "(no summary)"
+    }
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = []
+    for (const block of response.content) {
+      if (block.type === "tool_use") {
+        try {
+          const result = await executeTool(block, thisHandler, rl)
+          console.log(styleText("gray", `  [sub] ${block.name}: ${result.slice(0, 100)}`))
+
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: result
+          })
+        } catch (err) {
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: String(err),
+            is_error: true
+          })
+        }
+      }
+    }
+    messages.push({ role: "user", content: toolResults })
   }
+  console.log(styleText("magenta", "[Subagent stopped]"))
+  return "Subagent stopped after 30 turns without a final answer."
 }
 
-function isToolName(name: string): name is BaseToolName {
-  return Object.hasOwn(baseToolHandlerMap, name)
+function extractText(contentBlockArr: Anthropic.Messages.ContentBlockParam[]) {
+  return contentBlockArr
+    .filter(block => block.type == "text")
+    .map(textBlock => textBlock.text)
+    .join("\n")
 }
 
-async function runTool(name: string, input: Record<string, unknown>): Promise<string> {
-  if (isToolName(name)) {
-    return await baseToolHandlerMap[name](input) // 这里 name 是 ToolName 了
+function isToolName<T extends Record<SubToolName, ToolHandler>>(name: string, handlers: T): name is keyof T & string {
+  return Object.hasOwn(handlers, name)
+}
+
+async function runTool(
+  name: string,
+  input: Record<string, unknown>,
+  handlers: Record<SubToolName, ToolHandler>,
+  rl: readline.Interface
+): Promise<string> {
+  if (isToolName(name, handlers)) {
+    return await handlers[name](input, rl) // 这里 name 是 ToolName 了
   }
   return `Error: Unknown tool: ${name}`
 }
@@ -286,7 +360,7 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
         const denyMessage = await triggerHooks("PreToolUse", block, rl)
         if (!denyMessage) {
           try {
-            const result = await runTool(block.name, block.input as Record<string, unknown>)
+            const result = await runTool(block.name, block.input as Record<string, unknown>, baseToolHandlerMap, rl)
 
             if (block.name != "todoWrite") {
               console.log(styleText("gray", result.slice(0, 200)))
