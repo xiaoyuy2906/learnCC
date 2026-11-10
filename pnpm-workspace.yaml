@@ -1,0 +1,6 @@
+allowBuilds:
+  esbuild: true
+permissions:
+  dotenv:
+    build: false
+    skills: false
