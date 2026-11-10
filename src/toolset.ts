@@ -130,9 +130,21 @@ const taskTool = {
   }
 } satisfies Anthropic.Tool
 
+const loadSkillTool = {
+  name: "loadSkill" as const,
+  description: "Load the full SKILL.md content by skill name.",
+  input_schema: {
+    type: "object",
+    properties: {
+      name: { type: "string" }
+    },
+    required: ["name"]
+  }
+} satisfies Anthropic.Tool
+
 export const subTools = [runBashTool, readFileTool, writeFileTool, editFileTool, globTool, todoWrite]
 
-export const baseTools = [...subTools, taskTool]
+export const baseTools = [...subTools, taskTool, loadSkillTool]
 
 export type SubToolName = (typeof subTools)[number]["name"]
 export type BaseToolName = (typeof baseTools)[number]["name"]
