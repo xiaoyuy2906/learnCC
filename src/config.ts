@@ -1,5 +1,7 @@
 import os from "node:os"
 import "dotenv/config"
+import path from "node:path"
+import { globSync, statSync, realpathSync } from "node:fs"
 import { load } from "js-yaml"
 
 const workDir = process.cwd()
@@ -66,6 +68,18 @@ function parseFrontmatter(text: string): ParsedSkillFile {
   return { header, body }
 }
 
-function scanSkills(path) {}
+function scanSkills(dir: string) {
+  const skillsRoot = path.resolve(workDir, dir)
+  const skillFiles = globSync("*/SKILL.md", { cwd: skillsRoot }).sort()
+
+  function checkFile(filePath: string) {
+    if (!statSync(filePath).isFile()) {
+      return false
+    } else {
+      const realPath = realpathSync(filePath)
+      return path.relative(realPath, skillsRoot).startsWith("..")
+    }
+  }
+}
 
 export { workDir, model, max_tokens, system, subSystem }
