@@ -1,7 +1,7 @@
 import os from "node:os"
 import "dotenv/config"
 import path from "node:path"
-import { globSync, statSync, realpathSync } from "node:fs"
+import { globSync, statSync, realpathSync, readFileSync } from "node:fs"
 import { load } from "js-yaml"
 
 const workDir = process.cwd()
@@ -16,68 +16,63 @@ const environmentPrompt =
 const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Before starting any multi-step task, use todoWrite to plan your steps. Update status as you go. Use task for focused exploration or a self-contained subtask.`
 const subSystem = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Complete the given task, then return a concise final answer.`
 
-interface SkillHeader {
+interface SkillInfo {
   name: string
   description: string
+  content: string
 }
 
-interface ParsedSkillFile {
-  header: SkillHeader
-  body: string
-}
-
-function parseFrontmatter(text: string): ParsedSkillFile {
+function parseFrontmatter(absolutePath: string): SkillInfo {
+  const text = readFileSync(absolutePath, { encoding: "utf-8" })
+  const parentDir = path.basename(path.dirname(absolutePath))
   const lines = text.split(/\r?\n/)
+  const openingIdx = lines[0] == "---" ? 0 : -1
   const closingIdx = lines.findIndex((it, idx) => it == "---" && idx > 0)
-
-  if (lines[0] != "---" || closingIdx == -1) {
-    return {
-      header: {
-        name: "",
-        description: ""
-      },
-      body: text
-    }
-  }
-
-  const frontmatter = lines.slice(1, closingIdx).join("\n").trim()
+  const frontmatter = lines
+    .slice(openingIdx + 1, closingIdx)
+    .join("\n")
+    .trim()
   const body = lines
     .slice(closingIdx + 1)
     .join("\n")
     .trim()
+  const replacedDes = body.split("\n")[0]!.replace(/^#/, "").trim()
+
+  const loadedSkill: SkillInfo = {
+    name: parentDir,
+    description: replacedDes,
+    content: text
+  }
 
   // load() can return anything: an object, a string, a number...
-  let loaded
   try {
-    loaded = load(frontmatter)
-  } catch (e) {
-    loaded = null
-  }
-
-  // Start empty, then copy name/description only when they are really strings.
-  const header: SkillHeader = { name: "", description: "" }
-  if (typeof loaded == "object" && loaded != null) {
-    const obj = loaded as Record<string, unknown>
-    if (typeof obj.name == "string") {
-      header.name = obj.name
+    const loaded: any = load(frontmatter)
+    if (typeof loaded == "object" && loaded != null) {
+      loadedSkill.name = loaded.name || parentDir
+      loadedSkill.description = loaded.description || replacedDes
     }
-    if (typeof obj.description == "string") {
-      header.description = obj.description
-    }
-  }
-  return { header, body }
+    return loadedSkill
+  } catch (err) {}
+  return loadedSkill
 }
 
 function scanSkills(dir: string) {
+  // dir: absolute or relative to workDir
   const skillsRoot = path.resolve(workDir, dir)
-  const skillFiles = globSync("*/SKILL.md", { cwd: skillsRoot }).sort()
+  // Absolute paths of */SKILL.md
+  const skillFilePaths = globSync("*/SKILL.md", { cwd: skillsRoot })
+    .sort()
+    .map(relativePath => path.join(skillsRoot, relativePath))
+  const skillsMap = {}
 
-  function checkFile(filePath: string) {
+  function checkFilePath(filePath: string) {
+    // Only files inside skillsRoot
     if (!statSync(filePath).isFile()) {
       return false
     } else {
-      const realPath = realpathSync(filePath)
-      return path.relative(realPath, skillsRoot).startsWith("..")
+      const relative = path.relative(skillsRoot, realpathSync(filePath))
+      // ".." = escaped, absolute = other drive
+      return !relative.startsWith("..") && !path.isAbsolute(relative)
     }
   }
 }
