@@ -8,7 +8,7 @@ import { type BaseToolName, type TodoList } from "./toolset.js"
 import { runBash, runEdit, runGlob, runRead, runWrite, createTodoWrite } from "./toolHandlers.js"
 import { type ToolHandler } from "./toolHandlers.js"
 import { styleText } from "node:util"
-import { workDir, model, max_tokens, system, subSystem } from "./config.js"
+import { workDir, model, max_tokens, system, subSystem, loadSkills } from "./config.js"
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY
@@ -145,7 +145,8 @@ const baseToolHandlerMap = {
   editFile: runEdit,
   glob: runGlob,
   todoWrite: createTodoWrite(), // parent's own todo list
-  task: spawnSubagent
+  task: spawnSubagent,
+  loadSkill: loadSkills
 } satisfies {
   [key in BaseToolName]: ToolHandler
 }
@@ -334,15 +335,14 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
 
     messages.push({ role: "assistant", content: response.content })
 
+    // Print before the Stop hook, so forced extra rounds are shown too.
+    for (const block of response.content) {
+      if (block.type === "text") {
+        console.log(styleText(["bold", "green"], `Claude (${new Date().toISOString()}) >> `) + block.text)
+      }
+    }
     // Any stop_reason other than "tool_use" ends this turn.
     if (response.stop_reason != "tool_use") {
-      // Print before the Stop hook, so forced extra rounds are shown too.
-      for (const block of response.content) {
-        if (block.type === "text") {
-          console.log(styleText(["bold", "green"], `Claude (${new Date().toISOString()}) >> `) + block.text)
-        }
-      }
-
       // A Stop hook can return a string to force another round.
       const force = await triggerHooks("Stop", messages)
       if (force) {
