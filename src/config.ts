@@ -7,14 +7,12 @@ import { load } from "js-yaml"
 const workDir = process.cwd()
 const model = process.env.MODEL_ID || "claude-sonnet-4-6"
 const max_tokens = 9216
+const skillsMap = scanSkills(path.join(workDir, "skills"))
 
 const environmentPrompt =
   os.platform() === "win32"
     ? "Windows: the bash tool runs through cmd.exe; use cmd.exe syntax, not Unix Bash or PowerShell syntax, and prefer dedicated file tools for file operations"
     : "Unix-like: the bash tool runs the system shell"
-
-const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Before starting any multi-step task, use todoWrite to plan your steps. Update status as you go. Use task for focused exploration or a self-contained subtask.`
-const subSystem = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Complete the given task, then return a concise final answer.`
 
 interface SkillInfo {
   name: string
@@ -63,7 +61,16 @@ function scanSkills(dir: string) {
   const skillFilePaths = globSync("*/SKILL.md", { cwd: skillsRoot })
     .sort()
     .map(relativePath => path.join(skillsRoot, relativePath))
-  const skillsMap = {}
+  const skillsMap: Record<string, SkillInfo> = {}
+
+  for (const skillPath of skillFilePaths) {
+    if (checkFilePath(skillPath)) {
+      const skillInfo = parseFrontmatter(skillPath)
+      skillsMap[skillInfo.name] = skillInfo
+    }
+  }
+
+  return skillsMap
 
   function checkFilePath(filePath: string) {
     // Only files inside skillsRoot
@@ -77,4 +84,38 @@ function scanSkills(dir: string) {
   }
 }
 
-export { workDir, model, max_tokens, system, subSystem }
+function catalogSkills() {
+  if (Object.keys(skillsMap).length == 0) {
+    return "(no skills found)"
+  }
+  return Object.values(skillsMap)
+    .map(skillInfo => `- ${skillInfo.name}: ${skillInfo.description}`)
+    .join("\n")
+}
+
+function loadSkills(input: Record<string, unknown>) {
+  const { name } = input as { name: string }
+  const skill = skillsMap[name]
+  if (skill) {
+    return skill.content
+  }
+  const available = Object.keys(skillsMap).join(", ") || "none"
+  return `Error: Unknown skill '${name}'. Available: ${available}`
+}
+
+function buildSystemPrompt() {
+  const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}.
+   Before starting any multi-step task, use todoWrite to plan your steps.
+   Update status as you go. 
+   Use task for focused exploration or a self-contained subtask.
+    
+   Skills available:\n${catalogSkills()}\n\n
+   Use loadSkill to read the full instructions when a skill applies.`
+  return system
+}
+
+const system = buildSystemPrompt()
+
+const subSystem = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Complete the given task, then return a concise final answer.`
+
+export { workDir, model, max_tokens, system, subSystem, loadSkills }
