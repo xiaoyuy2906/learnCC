@@ -1,10 +1,17 @@
+import Anthropic from "@anthropic-ai/sdk"
 import os from "node:os"
 import "dotenv/config"
 import path from "node:path"
 import { globSync, statSync, realpathSync, readFileSync } from "node:fs"
 import { load } from "js-yaml"
 
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY
+})
 const workDir = process.cwd()
+const transcriptsDir = path.join(workDir, "transcripts")
+const resultsDir = path.join(workDir, "task_outputs", "tool-results")
+
 const model = process.env.MODEL_ID || "claude-sonnet-4-6"
 const max_tokens = 9216
 const skillsMap = scanSkills(path.join(workDir, "skills"))
@@ -106,9 +113,9 @@ function loadSkills(input: Record<string, unknown>) {
 function buildSystemPrompt() {
   const system = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}.
    Before starting any multi-step task, use todoWrite to plan your steps.
-   Update status as you go. 
+   Update status as you go.
    Use task for focused exploration or a self-contained subtask.
-    
+
    Skills available:\n${catalogSkills()}\n\n
    Use loadSkill to read the full instructions when a skill applies.`
   return system
@@ -118,4 +125,4 @@ const system = buildSystemPrompt()
 
 const subSystem = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Complete the given task, then return a concise final answer.`
 
-export { workDir, model, max_tokens, system, subSystem, loadSkills }
+export { client, workDir, transcriptsDir, resultsDir, model, max_tokens, system, subSystem, loadSkills }
