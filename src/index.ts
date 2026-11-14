@@ -8,11 +8,7 @@ import { type BaseToolName, type TodoList } from "./toolset.js"
 import { runBash, runEdit, runGlob, runRead, runWrite, createTodoWrite } from "./toolHandlers.js"
 import { type ToolHandler } from "./toolHandlers.js"
 import { styleText } from "node:util"
-import { workDir, model, max_tokens, system, subSystem, loadSkills } from "./config.js"
-
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY
-})
+import { workDir, model, max_tokens, system, subSystem, loadSkills, client } from "./config.js"
 
 // s03: Three-Gate Permission Pipeline
 
