@@ -71,23 +71,27 @@ function scanSkills(dir: string) {
   const skillsMap: Record<string, SkillInfo> = {}
 
   for (const skillPath of skillFilePaths) {
-    if (checkFilePath(skillPath)) {
+    if (checkFilePath(skillPath, skillsRoot)) {
       const skillInfo = parseFrontmatter(skillPath)
       skillsMap[skillInfo.name] = skillInfo
     }
   }
 
   return skillsMap
+}
 
-  function checkFilePath(filePath: string) {
-    // Only files inside skillsRoot
+function checkFilePath(filePath: string, dirPath: string) {
+  // Only filePath inside dirPath
+  try {
     if (!statSync(filePath).isFile()) {
       return false
     } else {
-      const relative = path.relative(skillsRoot, realpathSync(filePath))
+      const relative = path.relative(dirPath, realpathSync(filePath))
       // ".." = escaped, absolute = other drive
       return !relative.startsWith("..") && !path.isAbsolute(relative)
     }
+  } catch (e) {
+    return false
   }
 }
 
@@ -125,4 +129,4 @@ const system = buildSystemPrompt()
 
 const subSystem = `You are a coding agent at ${workDir}. Environment: ${environmentPrompt}. Complete the given task, then return a concise final answer.`
 
-export { client, workDir, transcriptsDir, resultsDir, model, max_tokens, system, subSystem, loadSkills }
+export { client, workDir, transcriptsDir, resultsDir, model, max_tokens, system, subSystem, loadSkills, checkFilePath }
