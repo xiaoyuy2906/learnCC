@@ -1,4 +1,5 @@
 import { workDir, transcriptsDir, resultsDir, checkFilePath } from "./config.js"
+import { randomUUID } from "node:crypto"
 import Anthropic from "@anthropic-ai/sdk"
 import path from "node:path"
 import { mkdir, writeFile, readFile } from "node:fs/promises"
@@ -13,7 +14,7 @@ const keepRecentMessages = 5
 async function saveOutput(tool_use_id: Anthropic.ToolResultBlockParam["tool_use_id"], output: string) {
   await mkdir(resultsDir, { recursive: true })
   const safeId = tool_use_id.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 200)
-  const fallback = "unknown_" + Math.random().toString(36).slice(2)
+  const fallback = "unknown_" + randomUUID().replace(/-/g, "")
   const docName = (safeId || fallback) + ".txt"
   const outputPath = path.join(resultsDir, docName)
   await writeFile(outputPath, output)
@@ -103,4 +104,64 @@ function persistedOutputPath(output: string): string | undefined {
   if (candidate && checkFilePath(candidate, resultsDir)) {
     return candidate
   }
+}
+
+function snipCompact(
+  messages: Anthropic.MessageParam[],
+  triggerMsgNum: number | undefined = 50,
+  targetMsgNum: number | undefined = 30
+) {
+  if (triggerMsgNum < targetMsgNum || targetMsgNum < 5) {
+    throw new Error("Require 5 <= target_messages < trigger_messages")
+  }
+  if (messages.length < triggerMsgNum) {
+    return messages
+  }
+
+  let headEnd = 3
+  let tailStart = messages.length - (targetMsgNum - headEnd - 1)
+
+  if (hasToolUse(messages[headEnd - 1])) {
+    while (headEnd < tailStart && isToolResult(messages[headEnd])) {
+      headEnd++
+    }
+  }
+
+  if (tailStart > 0 && isToolResult(messages[tailStart]) && hasToolUse(messages[tailStart - 1])) {
+    tailStart--
+  }
+
+  if (headEnd >= tailStart) {
+    return messages
+  }
+
+  const snippedMsgs = messages.slice(headEnd, tailStart)
+}
+
+function hasToolUse(message: Anthropic.MessageParam | undefined) {
+  if (message == undefined) {
+    return false
+  }
+  const content = message.content
+  return message.role == "assistant" && Array.isArray(content) && content.some(block => block.type == "tool_use")
+}
+
+function isToolResult(message: Anthropic.MessageParam | undefined) {
+  if (message == undefined) {
+    return false
+  }
+  const content = message.content
+  return message.role == "user" && Array.isArray(content) && content.some(block => block.type == "tool_result")
+}
+
+async function writeTranscript(messages: Anthropic.MessageParam[]) {
+  await mkdir(transcriptsDir, { recursive: true })
+  const docName = `transcript_${randomUUID().replace(/-/g, "")}.jsonl`
+  const outputPath = path.join(transcriptsDir, docName)
+  let lines = ""
+  for (const message of messages) {
+    lines += JSON.stringify(message) + "\n"
+  }
+  await writeFile(outputPath, lines)
+  return outputPath
 }
