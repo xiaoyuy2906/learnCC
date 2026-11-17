@@ -106,12 +106,12 @@ function persistedOutputPath(output: string): string | undefined {
   }
 }
 
-function snipCompact(
+async function snipCompact(
   messages: Anthropic.MessageParam[],
   triggerMsgNum: number | undefined = 50,
   targetMsgNum: number | undefined = 30
 ) {
-  if (triggerMsgNum < targetMsgNum || targetMsgNum < 5) {
+  if (triggerMsgNum <= targetMsgNum || targetMsgNum < 5) {
     throw new Error("Require 5 <= target_messages < trigger_messages")
   }
   if (messages.length < triggerMsgNum) {
@@ -136,6 +136,15 @@ function snipCompact(
   }
 
   const snippedMsgs = messages.slice(headEnd, tailStart)
+  if (snippedMsgs.length == 1 && isArchiveMarker(snippedMsgs[0])) {
+    return messages
+  }
+  const transcriptPath = await writeTranscript(messages)
+  const archiveMarker = {
+    role: "user",
+    content: `[${tailStart - headEnd} messages archived at ${transcriptPath}]`
+  } satisfies Anthropic.MessageParam
+  return messages.toSpliced(headEnd, tailStart - headEnd, archiveMarker)
 }
 
 function hasToolUse(message: Anthropic.MessageParam | undefined) {
@@ -164,4 +173,20 @@ async function writeTranscript(messages: Anthropic.MessageParam[]) {
   }
   await writeFile(outputPath, lines)
   return outputPath
+}
+
+function isArchiveMarker(message: Anthropic.MessageParam | undefined) {
+  if (message == undefined) {
+    return false
+  }
+  const content = message.content
+  const regexp = /^\[\d+ messages archived at (.+)\]$/g
+  if (typeof content == "string") {
+    const matchArr = regexp.exec(content)
+    if (matchArr && matchArr.length > 0) {
+      const path = matchArr[1] as string
+      return checkFilePath(path, transcriptsDir)
+    }
+  }
+  return false
 }
