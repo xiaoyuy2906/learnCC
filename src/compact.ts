@@ -190,3 +190,82 @@ function isArchiveMarker(message: Anthropic.MessageParam | undefined) {
   }
   return false
 }
+
+type IndexedToolResultBlock = {
+  messageIdx: number
+  blockIdx: number
+  toolResultBlock: Anthropic.ToolResultBlockParam
+}
+
+async function microCompact(messages: Anthropic.MessageParam[], targetChars: number | undefined) {
+  const toolResultArr: IndexedToolResultBlock[] = []
+
+  for (const [messageIdx, msg] of Object.entries(messages)) {
+    const { role, content } = msg
+    if (role == "user" && Array.isArray(content)) {
+      for (const [blockIdx, block] of Object.entries(content)) {
+        if (block.type == "tool_result") {
+          toolResultArr.push({
+            messageIdx: Number(messageIdx),
+            blockIdx: Number(blockIdx),
+            toolResultBlock: block
+          })
+        }
+      }
+    }
+  }
+
+  const unseenTools = unseenToolResultPositions(messages)
+  const consumedToolResultArr = toolResultArr.filter(block => {
+    for (const unseen of unseenTools) {
+      if (unseen.messageIdx == block.messageIdx && unseen.blockIdx == block.blockIdx) {
+        return false
+      }
+    }
+    return true
+  })
+
+  for (const consumed of consumedToolResultArr.slice(0, -keepRecentResults)) {
+    const { content, tool_use_id } = consumed.toolResultBlock
+
+    if (targetChars && estimateChars(messages) < targetChars) {
+      return messages
+    }
+
+    if (toString(content).length > 120) {
+      const savedPath = persistedOutputPath(toString(content)) ?? (await saveOutput(tool_use_id, toString(content)))
+      consumed.toolResultBlock.content = `[Earlier tool result saved at ${savedPath}]`
+    }
+  }
+  return messages
+}
+
+type UnseenToolResultPositions = {
+  [key in keyof IndexedToolResultBlock as Exclude<key, "toolResultBlock">]: IndexedToolResultBlock[key]
+}
+
+function unseenToolResultPositions(messages: Anthropic.MessageParam[]): UnseenToolResultPositions[] {
+  const unseenArr: UnseenToolResultPositions[] = []
+  const lastAssistantIdx =
+    messages.findLastIndex(msg => msg.role == "assistant") == -1
+      ? 0
+      : messages.findLastIndex(msg => msg.role == "assistant")
+  for (let messageIdx = lastAssistantIdx; messageIdx < messages.length; messageIdx++) {
+    if (messages[messageIdx]!.role == "user" && Array.isArray(messages[messageIdx]!.content)) {
+      const blockArr = messages[messageIdx]!.content as Anthropic.Messages.ContentBlockParam[]
+      for (const [blockIdx, block] of Object.entries(blockArr)) {
+        if (block.type == "tool_result") {
+          unseenArr.push({
+            messageIdx: Number(messageIdx),
+            blockIdx: Number(blockIdx)
+          })
+        }
+      }
+    }
+  }
+  return unseenArr
+}
+
+function estimateChars(messages: Anthropic.MessageParam[]): number {
+  return JSON.stringify(messages).length
+}
