@@ -3,7 +3,7 @@ import { styleText } from "node:util"
 import { readFile, mkdir, writeFile, glob } from "node:fs/promises"
 import * as readline from "node:readline/promises"
 import { execSync } from "child_process"
-import { workDir, max_tokens } from "./config.js"
+import { workDir } from "./config.js"
 import { type TodoList } from "./toolset.js"
 
 // s02: Tool Definitions & Dispatch
@@ -32,14 +32,14 @@ function runBash(input: Record<string, unknown>) {
       timeout: 120000,
       encoding: "utf-8"
     })
-    return result.slice(0, max_tokens) || "(no output)"
+    return result.slice(0, 50000) || "(no output)"
   } catch (e: any) {
     if (e.code === "ETIMEDOUT") {
       return "Error: Timeout (120s)"
     }
     // Many tools (tsc, test runners) print the failure reason to stdout, so return both streams
     const output = `${e.stdout ?? ""}${e.stderr ?? ""}`.trim()
-    return `Error: ${output || e.message}`.slice(0, max_tokens)
+    return `Error: ${output || e.message}`.slice(0, 50000)
   }
 }
 
