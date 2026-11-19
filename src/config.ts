@@ -9,8 +9,10 @@ const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY
 })
 const workDir = process.cwd()
-const transcriptsDir = path.join(workDir, "transcripts")
-const resultsDir = path.join(workDir, "task_outputs", "tool-results")
+// archived conversations; dot = glob tool skips it
+const transcriptsDir = path.join(workDir, ".transcripts")
+// saved large tool outputs; dot = glob tool skips it
+const resultsDir = path.join(workDir, ".task_outputs", "tool-results")
 
 const model = process.env.MODEL_ID || "claude-sonnet-4-6"
 const max_tokens = 9216
