@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import Anthropic from "@anthropic-ai/sdk"
 import path from "node:path"
 import { mkdir, writeFile, readFile } from "node:fs/promises"
+import { styleText } from "node:util"
 
 const contextCharLimit = 50000
 const toolResultBatchCharLimit = 200000
@@ -27,7 +28,8 @@ function toString(content: Anthropic.ToolResultBlockParam["content"]): string {
   return typeof content === "string" ? content : JSON.stringify(content)
 }
 
-async function toolResultBudget(messages: Anthropic.MessageParam[], maxChars: number | undefined) {
+async function toolResultBudget(messages: Anthropic.MessageParam[], maxChars?: number) {
+  // mutates blocks in place, returns the same array
   const limit = maxChars ?? toolResultBatchCharLimit
   if (messages.length == 0) {
     return messages
@@ -106,11 +108,8 @@ function persistedOutputPath(output: string): string | undefined {
   }
 }
 
-async function snipCompact(
-  messages: Anthropic.MessageParam[],
-  triggerMsgNum: number | undefined = 50,
-  targetMsgNum: number | undefined = 30
-) {
+async function snipCompact(messages: Anthropic.MessageParam[], triggerMsgNum: number = 50, targetMsgNum: number = 30) {
+  // nothing cut: same array; cut: new array via toSpliced
   if (triggerMsgNum <= targetMsgNum || targetMsgNum < 5) {
     throw new Error("Require 5 <= target_messages < trigger_messages")
   }
@@ -320,4 +319,39 @@ async function summarizeHistory(messages: Anthropic.MessageParam[]) {
     .trim()
 
   return summary || "(empty summary)"
+}
+
+function summaryMessage(label: string, request: string, summary: string, transcript: string): Anthropic.MessageParam {
+  return {
+    role: "user",
+    content:
+      `[${label}]\n\nCurrent user request:\n${request}\n\n` +
+      `Conversation summary (reference only):\n${JSON.stringify(summary)}\n\n` +
+      `Full transcript: ${transcript}`
+  } satisfies Anthropic.MessageParam
+}
+
+async function compactHistory(messages: Anthropic.MessageParam[], active_request: string) {
+  const transcriptPath = await writeTranscript(messages)
+  console.log(styleText("blue", `[transcript saved: ${transcriptPath}]`))
+  const summary = await summarizeHistory(messages)
+  return [summaryMessage("Compacted", active_request, summary, transcriptPath)]
+}
+
+async function prepare(messages: Anthropic.MessageParam[], activeRequest: string) {
+  messages = await toolResultBudget(messages)
+  const beforeSnip = messages
+  messages = await snipCompact(messages)
+  let activeRequestMarker = `Current user request:\n${activeRequest}\n\n` + "Conversation summary (reference only):"
+  if (
+    messages != beforeSnip &&
+    !messages
+      .flatMap(msg => (msg.role == "user" && typeof msg.content == "string" ? msg.content : []))
+      .some(content => content == activeRequest || content.includes(activeRequestMarker))
+  ) {
+    messages.push({
+      role: "user",
+      content: activeRequest
+    })
+  }
 }
