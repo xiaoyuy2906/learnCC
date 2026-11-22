@@ -3,3 +3,5 @@ node_modules
 .npmrc
 .DS_Store
 .vscode/
+.transcripts/
+.task_outputs/

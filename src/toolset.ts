@@ -142,9 +142,16 @@ const loadSkillTool = {
   }
 } satisfies Anthropic.Tool
 
+const compactTool = {
+  name: "compact" as const,
+  description: "Summarize earlier conversation to free context space.",
+  input_schema: { type: "object", properties: {} }
+} satisfies Anthropic.Tool
+
 export const subTools = [runBashTool, readFileTool, writeFileTool, editFileTool, globTool, todoWrite]
 
 export const baseTools = [...subTools, taskTool, loadSkillTool]
+export const masterTools = [...baseTools, compactTool]
 
 export type SubToolName = (typeof subTools)[number]["name"]
 export type BaseToolName = (typeof baseTools)[number]["name"]

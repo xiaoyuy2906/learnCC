@@ -28,6 +28,7 @@ function toString(content: Anthropic.ToolResultBlockParam["content"]): string {
   return typeof content === "string" ? content : JSON.stringify(content)
 }
 
+// Step 1: if the newest tool_result batch is over the batch limit, swap its largest results for path + preview
 async function toolResultBudget(messages: Anthropic.MessageParam[], maxChars?: number) {
   // mutates blocks in place, returns the same array
   const limit = maxChars ?? toolResultBatchCharLimit
@@ -108,6 +109,7 @@ function persistedOutputPath(output: string): string | undefined {
   }
 }
 
+// Step 2: once messages reach triggerMsgNum, archive the full history and keep head + marker + recent tail
 async function snipCompact(messages: Anthropic.MessageParam[], triggerMsgNum: number = 50, targetMsgNum: number = 30) {
   // nothing cut: same array; cut: new array via toSpliced
   if (triggerMsgNum <= targetMsgNum || targetMsgNum < 5) {
@@ -196,6 +198,7 @@ type IndexedToolResultBlock = {
   toolResultBlock: Anthropic.ToolResultBlockParam
 }
 
+// Step 3a: replace old, already-seen tool results (except the most recent few) with a path-only placeholder
 async function microCompact(messages: Anthropic.MessageParam[], targetChars: number | undefined) {
   const toolResultArr: IndexedToolResultBlock[] = []
 
@@ -269,6 +272,7 @@ function estimateChars(messages: Anthropic.MessageParam[]): number {
   return JSON.stringify(messages).length
 }
 
+// Step 3b: shrink the largest tool results (new or old) to path + 1000-char preview until under target
 async function fitToolResults(messages: Anthropic.MessageParam[], targetChars: number | undefined) {
   const sortedToolResultArr: Anthropic.ToolResultBlockParam[] = messages
     .flatMap(block => (block.role == "user" && Array.isArray(block.content) ? block.content : []))
@@ -331,11 +335,12 @@ function summaryMessage(label: string, request: string, summary: string, transcr
   } satisfies Anthropic.MessageParam
 }
 
-async function compactHistory(messages: Anthropic.MessageParam[], active_request: string) {
+// Step 4: archive everything and replace the whole history with one LLM summary message
+async function compactHistory(messages: Anthropic.MessageParam[], activeRequest: string) {
   const transcriptPath = await writeTranscript(messages)
   console.log(styleText("blue", `[transcript saved: ${transcriptPath}]`))
   const summary = await summarizeHistory(messages)
-  return [summaryMessage("Compacted", active_request, summary, transcriptPath)]
+  return [summaryMessage("Compacted", activeRequest, summary, transcriptPath)]
 }
 
 async function prepare(messages: Anthropic.MessageParam[], activeRequest: string) {
@@ -343,6 +348,7 @@ async function prepare(messages: Anthropic.MessageParam[], activeRequest: string
   const beforeSnip = messages
   messages = await snipCompact(messages)
   let activeRequestMarker = `Current user request:\n${activeRequest}\n\n` + "Conversation summary (reference only):"
+
   if (
     messages != beforeSnip &&
     !messages
@@ -354,4 +360,34 @@ async function prepare(messages: Anthropic.MessageParam[], activeRequest: string
       content: activeRequest
     })
   }
+
+  const targetChars = contextCharLimit * 0.8
+  if (estimateChars(messages) > contextCharLimit) {
+    messages = await microCompact(messages, targetChars)
+  }
+
+  if (estimateChars(messages) > contextCharLimit) {
+    messages = await fitToolResults(messages, targetChars)
+  }
+  if (estimateChars(messages) > contextCharLimit) {
+    console.log(styleText("yellow", "[auto compact]"))
+    messages = await compactHistory(messages, activeRequest)
+  }
+
+  return messages
 }
+
+async function reactiveCompact(messages: Anthropic.MessageParam[], activeRequest: string) {
+  const transcriptPath = await writeTranscript(messages)
+  console.log(styleText("blue", `[transcript saved: ${transcriptPath}]`))
+  let tailStart = Math.max(0, messages.length - keepRecentMessages)
+  if (tailStart > 0 && isToolResult(messages[tailStart]) && hasToolUse(messages[tailStart - 1])) {
+    tailStart--
+  }
+  const oldHistory = messages.slice(0, tailStart).length > 0 ? messages.slice(0, tailStart) : messages
+  const summary = await summarizeHistory(oldHistory)
+  const message = summaryMessage("Reactive compact", activeRequest, summary, transcriptPath)
+  return tailStart > 0 ? [message, ...messages.slice(tailStart)] : [message]
+}
+
+export { reactiveCompact, prepare, compactHistory }

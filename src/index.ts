@@ -3,12 +3,11 @@ import * as readline from "node:readline/promises"
 import figlet from "figlet"
 import path from "node:path"
 import "dotenv/config"
-import { baseTools, subTools, type SubToolName } from "./toolset.js"
-import { type BaseToolName, type TodoList } from "./toolset.js"
-import { runBash, runEdit, runGlob, runRead, runWrite, createTodoWrite } from "./toolHandlers.js"
-import { type ToolHandler } from "./toolHandlers.js"
+import { baseTools, subTools, masterTools, type SubToolName, type BaseToolName } from "./toolset.js"
+import { runBash, runEdit, runGlob, runRead, runWrite, createTodoWrite, type ToolHandler } from "./toolHandlers.js"
 import { styleText } from "node:util"
-import { workDir, model, max_tokens, system, subSystem, loadSkills, client } from "./config.js"
+import { workDir, model, max_tokens, system, subSystem, loadSkills, client, maxReactiveRetries } from "./config.js"
+import { prepare, reactiveCompact, compactHistory } from "./compact.js"
 
 // s03: Three-Gate Permission Pipeline
 
@@ -316,18 +315,39 @@ registerHook("PreToolUse", permissionHook)
 registerHook("PostToolUse", largeOutputHook)
 registerHook("Stop", summaryHook)
 
-async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interface) {
+async function agentLoop(messages: Anthropic.MessageParam[], activeRequest: string, rl: readline.Interface) {
   let roundSinceLastTodo: number = 0
+  let reactiveRetries = 0
 
   // Each round: call Claude, run its tools, send the results back.
   while (true) {
-    const response = await client.messages.create({
-      model,
-      max_tokens,
-      tools: baseTools,
-      messages,
-      system
-    })
+    // Await first so messages.length is read after prepare finishes
+    const prepared = await prepare(messages, activeRequest)
+    messages.splice(0, messages.length, ...prepared)
+    let response: Anthropic.Messages.Message & {
+      _request_id?: string | null
+    }
+    try {
+      response = await client.messages.create({
+        model,
+        max_tokens,
+        tools: masterTools,
+        messages,
+        system
+      })
+      reactiveRetries = 0
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
+      const keywords = ["prompt_too_long", "prompt is too long", "too many tokens"]
+      if (keywords.some(word => errMsg.includes(word)) && reactiveRetries < maxReactiveRetries) {
+        console.log("[reactive compact]")
+        const compacted = await reactiveCompact(messages, activeRequest)
+        messages.splice(0, messages.length, ...compacted)
+        reactiveRetries++
+        continue
+      }
+      throw err
+    }
 
     messages.push({ role: "assistant", content: response.content })
 
@@ -351,12 +371,21 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
     // Run every tool call in this response. A denied call still gets a tool_result.
     const toolResults: Anthropic.ToolResultBlockParam[] = []
     let usedTodo: boolean = false
+    let compactRequested: boolean = false
+
     for (const block of response.content) {
       if (block.type === "tool_use") {
         const denyMessage = await triggerHooks("PreToolUse", block, rl)
         if (!denyMessage) {
           try {
-            const result = await runTool(block.name, block.input as Record<string, unknown>, baseToolHandlerMap, rl)
+            let result: string
+            console.log(styleText("cyan", `> ${block.name}`))
+            if (block.name == "compact") {
+              result = "Compaction requested after this tool batch."
+              compactRequested = true
+            } else {
+              result = await runTool(block.name, block.input as Record<string, unknown>, baseToolHandlerMap, rl)
+            }
 
             if (block.name != "todoWrite") {
               console.log(styleText("gray", result.slice(0, 200)))
@@ -403,6 +432,11 @@ async function agentLoop(messages: Anthropic.MessageParam[], rl: readline.Interf
     } else {
       messages.push({ role: "user", content: toolResults })
     }
+
+    if (compactRequested) {
+      const compact = await compactHistory(messages, activeRequest)
+      messages.splice(0, messages.length, ...compact)
+    }
   }
 }
 
@@ -421,16 +455,18 @@ async function main() {
       })
     )
   )
+  console.log("s08: Context Compact - archive, reduce, then summarize")
+  console.log("Enter a question, press Enter to send. Type q to quit.\n")
 
   while (true) {
-    const input = await rl.question(`s05 (${new Date().toISOString()}) >> `)
+    const input = await rl.question(`s08 (${new Date().toISOString()}) >> `)
     if (["q", "exit", ""].includes(input.trim().toLowerCase())) {
       break
     }
     await triggerHooks("UserPromptSubmit", input)
     msgHistory.push({ role: "user", content: input })
     try {
-      await agentLoop(msgHistory, rl)
+      await agentLoop(msgHistory, input, rl)
     } catch (err) {
       // API failed (network, rate limit, bad key...): report it and keep the session alive
       console.log(styleText("red", `\nAPI error: ${err instanceof Error ? err.message : String(err)}`))
