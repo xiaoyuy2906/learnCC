@@ -19,6 +19,9 @@ const workDir = process.cwd()
 const transcriptsDir = path.join(workDir, ".transcripts")
 // saved large tool outputs; dot = glob tool skips it
 const resultsDir = path.join(workDir, ".task_outputs", "tool-results")
+const memoryDir = path.join(workDir, ".memory")
+// table of contents for all the listing memory files
+const memoryIndex = path.join(memoryDir, "MEMORY.md")
 
 const model = process.env.MODEL_ID || "claude-sonnet-4-6"
 const max_tokens = 9216
@@ -104,6 +107,13 @@ function checkFilePath(filePath: string, dirPath: string) {
   }
 }
 
+function isInside(filePath: string, dirPath: string) {
+  // realpathSync: fs, file must exist; path.resolve: string only, no disk check
+  const relative = path.relative(dirPath, path.resolve(filePath))
+  // ".." = escaped, absolute = other drive
+  return !relative.startsWith("..") && !path.isAbsolute(relative)
+}
+
 function catalogSkills() {
   if (Object.keys(skillsMap).length == 0) {
     return "(no skills found)"
@@ -146,6 +156,9 @@ export {
   workDir,
   transcriptsDir,
   resultsDir,
+  memoryDir,
+  memoryIndex,
+  isInside,
   model,
   max_tokens,
   system,
