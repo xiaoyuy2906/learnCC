@@ -1,6 +1,7 @@
 import { memoryDir, memoryIndex, isInside } from "./config.js"
 import { dump } from "js-yaml"
-import { mkdir } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
+import { globSync } from "node:fs"
 import path from "node:path"
 
 const memoryTypes = ["user", "feedback", "project", "reference"] as const
@@ -47,6 +48,18 @@ function memoryPath(filename: string, allowIndex: boolean = false) {
   return filePath
 }
 
+async function rebuildMemoryIndex() {
+  await mkdir(memoryDir, { recursive: true })
+
+  for (const entry of globSync("*.md", { cwd: memoryDir }).sort()) {
+    try {
+      const fullpath = memoryPath(entry)
+    } catch (err) {
+      continue
+    }
+  }
+}
+
 async function writeMemoryFile(name: string, memType: MemoryTypes, description: string, body: string) {
   if (name.trim() == "") {
     throw new Error("Memory name cannot be empty")
@@ -59,4 +72,9 @@ async function writeMemoryFile(name: string, memType: MemoryTypes, description: 
   }
 
   await mkdir(memoryDir, { recursive: true })
+  const filePath = memoryPath(`${memorySlug(name)}.md`)
+
+  await writeFile(filePath, memoryDocument(name, memType, description, body))
+  rebuildMemoryIndex()
+  return filePath
 }

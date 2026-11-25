@@ -39,37 +39,70 @@ interface SkillInfo {
   content: string
 }
 
-function parseFrontmatter(absolutePath: string): SkillInfo {
+// result of parseFrontmatter, shared by skill and memory
+interface ParsedYaml {
+  // whole file content
+  text: string
+  // parsed frontmatter object
+  metadata: Record<string, unknown>
+  // content after the closing ---, or whole file if no frontmatter
+  body: string
+}
+
+function parseFrontmatter(absolutePath: string): ParsedYaml {
   const text = readFileSync(absolutePath, { encoding: "utf-8" })
-  const parentDir = path.basename(path.dirname(absolutePath))
   const lines = text.split(/\r?\n/)
   const openingIdx = lines[0] == "---" ? 0 : -1
   const closingIdx = lines.findIndex((it, idx) => it == "---" && idx > 0)
-  const frontmatter = lines
-    .slice(openingIdx + 1, closingIdx)
-    .join("\n")
-    .trim()
-  const body = lines
-    .slice(closingIdx + 1)
-    .join("\n")
-    .trim()
-  const replacedDes = body.split("\n")[0]!.replace(/^#/, "").trim()
+  let body = ""
+  let frontmatter = ""
+  if (openingIdx == 0 && closingIdx > 0) {
+    frontmatter = lines
+      .slice(openingIdx + 1, closingIdx)
+      .join("\n")
+      .trim()
+    body = lines
+      .slice(closingIdx + 1)
+      .join("\n")
+      .trim()
+  } else {
+    body = lines.join("\n").trim()
+  }
 
-  const loadedSkill: SkillInfo = {
-    name: parentDir,
-    description: replacedDes,
-    content: text
+  const parsedYaml: ParsedYaml = {
+    text,
+    body,
+    metadata: {}
   }
 
   // load() can return anything: an object, a string, a number...
   try {
     const loaded: any = load(frontmatter)
     if (typeof loaded == "object" && loaded != null) {
-      loadedSkill.name = loaded.name || parentDir
-      loadedSkill.description = loaded.description || replacedDes
+      parsedYaml.metadata = { ...loaded }
     }
-    return loadedSkill
   } catch (err) {}
+  return parsedYaml
+}
+
+function parseSkillFile(absolutePath: string): SkillInfo {
+  const parentDir = path.basename(path.dirname(absolutePath))
+  const { text, body, metadata } = parseFrontmatter(absolutePath)
+  const replacedDes = body.split("\n")[0]!.replace(/^#/, "").trim()
+  const loadedSkill: SkillInfo = {
+    name: parentDir,
+    description: replacedDes,
+    content: text
+  }
+
+  if (Object.hasOwn(metadata, "name") && typeof metadata.name == "string") {
+    loadedSkill.name = metadata.name || loadedSkill.name
+  }
+
+  if (Object.hasOwn(metadata, "description") && typeof metadata.description == "string") {
+    loadedSkill.description = metadata.description || loadedSkill.description
+  }
+
   return loadedSkill
 }
 
@@ -84,7 +117,7 @@ function scanSkills(dir: string) {
 
   for (const skillPath of skillFilePaths) {
     if (checkFilePath(skillPath, skillsRoot)) {
-      const skillInfo = parseFrontmatter(skillPath)
+      const skillInfo = parseSkillFile(skillPath)
       skillsMap[skillInfo.name] = skillInfo
     }
   }
