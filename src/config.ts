@@ -5,14 +5,14 @@ import path from "node:path"
 import { globSync, statSync, realpathSync, readFileSync } from "node:fs"
 import { load } from "js-yaml"
 
-// const client = new Anthropic({
-//   apiKey: process.env.ANTHROPIC_API_KEY
-// })
-
 const client = new Anthropic({
-  apiKey: process.env.AI_GATEWAY_API_KEY,
-  baseURL: "https://ai-gateway.vercel.sh"
+  apiKey: process.env.ANTHROPIC_API_KEY
 })
+
+// const client = new Anthropic({
+//   apiKey: process.env.AI_GATEWAY_API_KEY,
+//   baseURL: "https://ai-gateway.vercel.sh"
+// })
 
 const workDir = process.cwd()
 // archived conversations; dot = glob tool skips it
