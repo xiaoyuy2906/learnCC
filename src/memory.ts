@@ -1,6 +1,7 @@
-import { memoryDir, memoryIndex, isInside } from "./config.js"
+import { memoryDir, memoryIndex, isInside, parseFrontmatter } from "./config.js"
 import { dump } from "js-yaml"
 import { mkdir, writeFile } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 import { globSync } from "node:fs"
 import path from "node:path"
 
@@ -15,7 +16,11 @@ function memorySlug(name: string): string {
     .toLowerCase()
     .replace(regex, "-")
     .replace(/^[-_]+|[-_]+$/g, "")
-  return slug || "memory"
+  // "memory.md" = "MEMORY.md" on macOS, would hit the index
+  if (slug == "" || slug == "memory") {
+    return "memory" + randomUUID().replace(/-/g, "")
+  }
+  return slug
 }
 
 function memoryDocument(name: string, memType: MemoryTypes, description: string, body: string) {
@@ -25,17 +30,17 @@ function memoryDocument(name: string, memType: MemoryTypes, description: string,
     type: memType
   }).trim()
 
-  return `---\n${metadata}\n---\n\n${body.trim()}`
+  return `---\n${metadata}\n---\n\n${body.trim()}\n`
 }
 
 // filename: bare file name ("xxx.md"), NOT a path
-function memoryPath(filename: string, allowIndex: boolean = false) {
+function memoryPath(filename: string) {
   if (path.basename(filename) !== filename || filename == "" || filename == ".") {
     // this error will be thrown when the input filename is a path
     throw new Error(`Invalid memory filename: ${filename}`)
   }
 
-  if (filename.toLowerCase() == path.basename(memoryIndex).toLowerCase() && allowIndex == false) {
+  if (filename.toLowerCase() == path.basename(memoryIndex).toLowerCase()) {
     throw new Error("The memory index is not a memory record")
   }
 
@@ -48,16 +53,43 @@ function memoryPath(filename: string, allowIndex: boolean = false) {
   return filePath
 }
 
+interface MemoryInfo {
+  name: string
+  description: string
+}
+
+function parseMemoryFile(absolutePath: string): MemoryInfo {
+  const { body, metadata } = parseFrontmatter(absolutePath)
+  const filename = path.basename(absolutePath, path.extname(absolutePath))
+  const firstLine = body.split("\n").find(line => line !== "") ?? "".trim()
+  const memoryInfo: MemoryInfo = {
+    name: filename,
+    description: firstLine
+  }
+  if (Object.hasOwn(metadata, "name") && typeof metadata.name == "string") {
+    memoryInfo.name = (metadata.name || filename).replace(/\s+/g, " ").trim()
+  }
+
+  if (Object.hasOwn(metadata, "description") && typeof metadata.description == "string") {
+    memoryInfo.description = (metadata.description || firstLine).replace(/\s+/g, " ").trim()
+  }
+  return memoryInfo
+}
+
 async function rebuildMemoryIndex() {
   await mkdir(memoryDir, { recursive: true })
-
+  const lines: string[] = []
   for (const entry of globSync("*.md", { cwd: memoryDir }).sort()) {
     try {
-      const fullpath = memoryPath(entry)
+      const fullPath = memoryPath(entry)
+      const { name, description } = parseMemoryFile(fullPath)
+      lines.push(`- [${name}](${fullPath}) - ${description}`)
     } catch (err) {
       continue
     }
   }
+  const memoryIndexText = lines.join("\n") + "\n"
+  await writeFile(memoryIndex, memoryIndexText)
 }
 
 async function writeMemoryFile(name: string, memType: MemoryTypes, description: string, body: string) {
@@ -65,7 +97,7 @@ async function writeMemoryFile(name: string, memType: MemoryTypes, description: 
     throw new Error("Memory name cannot be empty")
   }
   if (!memoryTypes.includes(memType)) {
-    throw new Error(`"Unknown memory type: ${memType}`)
+    throw new Error(`Unknown memory type: ${memType}`)
   }
   if (description.trim() == "" || body.trim() == "") {
     throw new Error("Memory description and body cannot be empty")
@@ -75,6 +107,6 @@ async function writeMemoryFile(name: string, memType: MemoryTypes, description: 
   const filePath = memoryPath(`${memorySlug(name)}.md`)
 
   await writeFile(filePath, memoryDocument(name, memType, description, body))
-  rebuildMemoryIndex()
+  await rebuildMemoryIndex()
   return filePath
 }

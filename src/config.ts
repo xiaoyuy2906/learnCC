@@ -198,5 +198,6 @@ export {
   subSystem,
   loadSkills,
   checkFilePath,
+  parseFrontmatter,
   maxReactiveRetries
 }
