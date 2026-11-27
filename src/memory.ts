@@ -1,12 +1,17 @@
+import Anthropic from "@anthropic-ai/sdk"
 import { memoryDir, memoryIndex, isInside, parseFrontmatter } from "./config.js"
 import { dump } from "js-yaml"
 import { mkdir, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import { globSync } from "node:fs"
-import path from "node:path"
+import { globSync, existsSync } from "node:fs"
+import path, { basename } from "node:path"
 
 const memoryTypes = ["user", "feedback", "project", "reference"] as const
 type MemoryTypes = (typeof memoryTypes)[number]
+
+function isMemoryType(type: string): type is MemoryTypes {
+  return (memoryTypes as readonly string[]).includes(type)
+}
 
 function memorySlug(name: string): string {
   // old: /[^\w]+/g  (\w = ASCII only, drops Chinese)
@@ -53,18 +58,29 @@ function memoryPath(filename: string) {
   return filePath
 }
 
-interface MemoryInfo {
+// parsed memory file
+interface MemoryFileInfo {
+  // absolute path, NOT a bare name
+  filename: string
+  // title for the model
   name: string
+  // short summary
   description: string
+  type: MemoryTypes
+  // text after frontmatter
+  body: string
 }
 
-function parseMemoryFile(absolutePath: string): MemoryInfo {
+function parseMemoryFile(absolutePath: string): MemoryFileInfo {
   const { body, metadata } = parseFrontmatter(absolutePath)
   const filename = path.basename(absolutePath, path.extname(absolutePath))
   const firstLine = body.split("\n").find(line => line !== "") ?? "".trim()
-  const memoryInfo: MemoryInfo = {
+  const memoryInfo: MemoryFileInfo = {
+    filename: absolutePath,
     name: filename,
-    description: firstLine
+    type: "project",
+    description: firstLine,
+    body
   }
   if (Object.hasOwn(metadata, "name") && typeof metadata.name == "string") {
     memoryInfo.name = (metadata.name || filename).replace(/\s+/g, " ").trim()
@@ -73,6 +89,11 @@ function parseMemoryFile(absolutePath: string): MemoryInfo {
   if (Object.hasOwn(metadata, "description") && typeof metadata.description == "string") {
     memoryInfo.description = (metadata.description || firstLine).replace(/\s+/g, " ").trim()
   }
+
+  if (Object.hasOwn(metadata, "type") && typeof metadata.type == "string" && isMemoryType(metadata.type)) {
+    memoryInfo.type = metadata.type || "project"
+  }
+
   return memoryInfo
 }
 
@@ -109,4 +130,36 @@ async function writeMemoryFile(name: string, memType: MemoryTypes, description: 
   await writeFile(filePath, memoryDocument(name, memType, description, body))
   await rebuildMemoryIndex()
   return filePath
+}
+
+function selectRelevantMemories(messages: Anthropic.MessageParam[], maxItems: number = 5) {}
+
+function listMemoryFiles() {
+  const records: Array<MemoryFileInfo> = []
+
+  if (!existsSync(memoryDir)) {
+    return records
+  }
+
+  for (const entry of globSync("*.md", { cwd: memoryDir }).sort()) {
+    if (entry == basename(memoryIndex)) {
+      continue
+    }
+    let fullPath: string = ""
+    try {
+      fullPath = memoryPath(entry)
+    } catch (err) {
+      continue
+    }
+    const { name, description, type, body } = parseMemoryFile(fullPath)
+    records.push({
+      filename: fullPath,
+      name,
+      description,
+      type,
+      body
+    })
+  }
+
+  return records
 }
