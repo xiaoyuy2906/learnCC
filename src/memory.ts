@@ -74,7 +74,7 @@ interface MemoryFileInfo {
 function parseMemoryFile(absolutePath: string): MemoryFileInfo {
   const { body, metadata } = parseFrontmatter(absolutePath)
   const filename = path.basename(absolutePath, path.extname(absolutePath))
-  const firstLine = body.split("\n").find(line => line !== "") ?? "".trim()
+  const firstLine = (body.split("\n").find(line => line !== "") ?? "").trim()
   const memoryInfo: MemoryFileInfo = {
     filename: absolutePath,
     name: filename,
@@ -91,7 +91,7 @@ function parseMemoryFile(absolutePath: string): MemoryFileInfo {
   }
 
   if (Object.hasOwn(metadata, "type") && typeof metadata.type == "string" && isMemoryType(metadata.type)) {
-    memoryInfo.type = metadata.type || "project"
+    memoryInfo.type = metadata.type
   }
 
   return memoryInfo
@@ -132,9 +132,7 @@ async function writeMemoryFile(name: string, memType: MemoryTypes, description: 
   return filePath
 }
 
-function selectRelevantMemories(messages: Anthropic.MessageParam[], maxItems: number = 5) {}
-
-function listMemoryFiles() {
+function listMemoryFiles(): MemoryFileInfo[] {
   const records: Array<MemoryFileInfo> = []
 
   if (!existsSync(memoryDir)) {
@@ -151,15 +149,49 @@ function listMemoryFiles() {
     } catch (err) {
       continue
     }
-    const { name, description, type, body } = parseMemoryFile(fullPath)
+
     records.push({
-      filename: fullPath,
-      name,
-      description,
-      type,
-      body
+      ...parseMemoryFile(fullPath),
+      filename: fullPath
     })
   }
 
   return records
+}
+
+function getMessageText(message: Anthropic.Messages.MessageParam) {
+  const { content } = message
+  if (typeof content == "string") {
+    return content
+  } else {
+    const blockTextArr = []
+    for (const block of content) {
+      if (block.type == "text" && block.text.trim() !== "") {
+        blockTextArr.push(block.text)
+      }
+    }
+    return blockTextArr.join("\n")
+  }
+}
+
+function recentUserText(messages: Anthropic.MessageParam[], maxTurns: number | undefined = 3) {
+  const turns: string[] = []
+  for (const message of messages.toReversed()) {
+    if (message.role == "user") {
+      const text = getMessageText(message)
+      if (text.trim() !== "") {
+        turns.push(text)
+      }
+
+      if (turns.length == maxTurns) {
+        break
+      }
+    }
+  }
+  return turns.toReversed().join("\n").slice(0, 4000)
+}
+
+function selectRelevantMemories(messages: Anthropic.MessageParam[], maxItems: number | undefined = 5) {
+  const records: MemoryFileInfo[] = listMemoryFiles()
+  const query = recentUserText(messages)
 }
