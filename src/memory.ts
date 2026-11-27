@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk"
-import { memoryDir, memoryIndex, isInside, parseFrontmatter } from "./config.js"
+import { memoryDir, memoryIndex, isInside, parseFrontmatter, client, model } from "./config.js"
 import { dump } from "js-yaml"
 import { mkdir, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
@@ -191,7 +191,36 @@ function recentUserText(messages: Anthropic.MessageParam[], maxTurns: number | u
   return turns.toReversed().join("\n").slice(0, 4000)
 }
 
-function selectRelevantMemories(messages: Anthropic.MessageParam[], maxItems: number | undefined = 5) {
+function decodeJSONArr(s: string) {
+  const regexp = /\[(?:\s*\d*(?:\s*,\s*)?)*\]/
+  s.match(regexp)
+}
+
+async function selectRelevantMemories(messages: Anthropic.MessageParam[], maxItems: number | undefined = 5) {
   const records: MemoryFileInfo[] = listMemoryFiles()
   const query = recentUserText(messages)
+
+  if (records.length == 0 || query == "") {
+    return
+  }
+
+  const catalog = records
+    .map((memoryInfo, index) => `${index}: ${memoryInfo.name} - ${memoryInfo.description}`)
+    .join("\n")
+
+  const prompt =
+    "Select memory records that are relevant to the current user request. " +
+    "Return only a JSON array of catalog indices, such as [0, 2]. " +
+    "Return [] when none are relevant.\n\n" +
+    `Current request:\n${query}\n\nMemory catalog:\n${catalog.slice(0, 12000)}`
+
+  try {
+    const response = await client.messages.create({
+      model,
+      max_tokens: 200,
+      messages: [{ role: "user", content: prompt }]
+    })
+
+    getMessageText({ role: "assistant", content: response.content })
+  } catch (err) {}
 }
