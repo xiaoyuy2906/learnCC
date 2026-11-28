@@ -192,16 +192,50 @@ function recentUserText(messages: Anthropic.MessageParam[], maxTurns: number | u
 }
 
 function decodeJSONArr(s: string) {
-  const regexp = /\[(?:\s*\d*(?:\s*,\s*)?)*\]/
-  s.match(regexp)
+  // shitty regexp draft via opus 5.5 to match int arrays like [] or [0, 2]
+  const regexp = /\[\s*(?:\d+\s*(?:,\s*\d+\s*)*)?\]/g
+  const matchArray = s.match(regexp)
+  if (matchArray == null) {
+    return []
+  } else {
+    const set: Set<number> = new Set()
+    for (const item of matchArray) {
+      try {
+        JSON.parse(item).forEach((it: number) => set.add(it))
+      } catch (err) {
+        continue
+      }
+    }
+    return Array.from(set)
+  }
+}
+
+function keywordMemorySelection(records: MemoryFileInfo[], query: string, maxItems: number) {
+  // keywords: 3+ char words (a-z0-9_) or 2+ Chinese chars (\u4e00-\u9fff = common CJK)
+  const regexp = /[a-z0-9_]{3,}|[\u4e00-\u9fff]{2,}/gi
+  const keywordsSet = new Set(query.toLowerCase().match(regexp))
+  const rankedRecords = records
+    .flatMap(memoryInfo => {
+      const { name, description, filename } = memoryInfo
+      const catalogText = `${name} ${description}`.toLowerCase()
+      let score = 0
+      for (const word of keywordsSet) {
+        score = catalogText.includes(word) ? score + 1 : score
+      }
+      return score == 0 ? [] : { score, filename }
+    })
+    .sort((a, b) => b.score - a.score)
+
+  return rankedRecords.slice(0, maxItems).map(it => it.filename)
 }
 
 async function selectRelevantMemories(messages: Anthropic.MessageParam[], maxItems: number | undefined = 5) {
+  // return an array of the absolute paths of the relevant memory files
   const records: MemoryFileInfo[] = listMemoryFiles()
   const query = recentUserText(messages)
-
+  const selected: string[] = [] // the filename array for the choosen memory files
   if (records.length == 0 || query == "") {
-    return
+    return selected
   }
 
   const catalog = records
@@ -221,6 +255,21 @@ async function selectRelevantMemories(messages: Anthropic.MessageParam[], maxIte
       messages: [{ role: "user", content: prompt }]
     })
 
-    getMessageText({ role: "assistant", content: response.content })
-  } catch (err) {}
+    const indices = decodeJSONArr(getMessageText({ role: "assistant", content: response.content }))
+    for (const index of indices) {
+      if (index >= 0 && index < records.length) {
+        const { filename } = records[index]!
+
+        if (!selected.includes(filename)) {
+          selected.push(filename)
+        }
+        if (selected.length == maxItems) {
+          break
+        }
+      }
+    }
+    return selected
+  } catch (err) {
+    return keywordMemorySelection(records, query, maxItems)
+  }
 }
